@@ -23,7 +23,8 @@ impl Default for PtySize {
 
 pub(crate) type Input = mpsc::Receiver<Vec<u8>>;
 pub(crate) type Output = mpsc::Sender<Vec<u8>>;
-pub(crate) type ResizeRx = mpsc::Receiver<PtySize>;
+pub(crate) type ResizeInput = mpsc::Receiver<PtySize>;
+pub(crate) type ResizeOutput = mpsc::Sender<PtySize>;
 
 pub struct Session {
     pub user: String,
@@ -38,11 +39,19 @@ pub struct Session {
 
     pub(crate) output: Output,
 
-    pub(crate) resize_rx: ResizeRx,
+    pub(crate) resize_input: ResizeInput,
+
+    pub(crate) resize_output: ResizeOutput,
 }
 
 impl Session {
-    pub(crate) fn new(user: String, input: Input, output: Output, resize_rx: ResizeRx) -> Self {
+    pub(crate) fn new(
+        user: String,
+        input: Input,
+        output: Output,
+        resize_input: ResizeInput,
+        resize_output: ResizeOutput,
+    ) -> Self {
         Self {
             user,
             pty_size: Arc::new(RwLock::new(PtySize::default())),
@@ -50,7 +59,8 @@ impl Session {
             term: String::from("xterm"),
             input,
             output,
-            resize_rx,
+            resize_input,
+            resize_output,
         }
     }
 
@@ -84,6 +94,6 @@ impl Session {
     }
 
     pub fn try_revc_resive(&mut self) -> Option<PtySize> {
-        self.resize_rx.try_recv().ok()
+        self.resize_input.try_recv().ok()
     }
 }
