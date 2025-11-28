@@ -4,10 +4,10 @@ use tokio::sync::{RwLock, mpsc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
-    pub width: usize,
-    pub height: usize,
-    pub pixel_width: usize,
-    pub pixel_height: usize,
+    pub width: u32,
+    pub height: u32,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
 }
 
 impl Default for PtySize {
@@ -21,10 +21,10 @@ impl Default for PtySize {
     }
 }
 
-pub(crate) type Input = mpsc::Receiver<Vec<u8>>;
-pub(crate) type Output = mpsc::Sender<Vec<u8>>;
-pub(crate) type ResizeInput = mpsc::Receiver<PtySize>;
-pub(crate) type ResizeOutput = mpsc::Sender<PtySize>;
+pub(crate) type Input = mpsc::Sender<Vec<u8>>;
+pub(crate) type Output = mpsc::Receiver<Vec<u8>>;
+pub(crate) type ResizeInput = mpsc::Sender<PtySize>;
+pub(crate) type ResizeOutput = mpsc::Receiver<PtySize>;
 
 pub struct Session {
     pub user: String,
@@ -45,13 +45,10 @@ pub struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(
-        user: String,
-        input: Input,
-        output: Output,
-        resize_input: ResizeInput,
-        resize_output: ResizeOutput,
-    ) -> Self {
+    pub(crate) fn new(user: String) -> Self {
+        let (input, output) = mpsc::channel::<Vec<u8>>(32);
+        let (resize_input, resize_output) = mpsc::channel::<PtySize>(8);
+
         Self {
             user,
             pty_size: Arc::new(RwLock::new(PtySize::default())),
@@ -68,19 +65,25 @@ impl Session {
         *self.pty_size.read().await
     }
 
-    pub async fn set_pty_size(&self, size: PtySize) {
+    pub(crate) async fn set_pty_size(&self, size: PtySize) {
         *self.pty_size.write().await = size;
     }
 
+    pub(crate) fn resize(&self, size: PtySize) -> crate::Result<()> {
+        self.resize_input
+            .try_send(size)
+            .map_err(|_| crate::Error::Custom("Failed to resize".into()))
+    }
+
     pub async fn read(&mut self) -> Option<Vec<u8>> {
-        self.input.recv().await
+        self.output.recv().await
     }
 
     /// # Errors
     ///
     /// Will return `Err` if data failed to send
     pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
-        self.output
+        self.input
             .send(data.to_vec())
             .await
             .map_err(|_| crate::Error::Custom("Failed to send data".into()))
@@ -94,6 +97,6 @@ impl Session {
     }
 
     pub fn try_revc_resive(&mut self) -> Option<PtySize> {
-        self.resize_input.try_recv().ok()
+        self.resize_output.try_recv().ok()
     }
 }

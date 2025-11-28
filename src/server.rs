@@ -7,7 +7,10 @@ use russh::{
 };
 use tokio::sync::Mutex;
 
-use crate::{App, Result, session::Session};
+use crate::{
+    App, Result,
+    session::{PtySize, Session},
+};
 
 #[derive(Default)]
 pub struct Server<A> {
@@ -93,15 +96,28 @@ where
         ShenronHandler {
             app: Arc::clone(&self.app),
             channels: Arc::new(Mutex::new(HashMap::new())),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            sessions: SessionMap::default(),
         }
+    }
+}
+
+#[derive(Default)]
+struct SessionMap {
+    sessions: Arc<Mutex<HashMap<ChannelId, Arc<Session>>>>,
+}
+
+impl SessionMap {
+    async fn get(&self, channel: ChannelId) -> Option<Arc<Session>> {
+        let sessions = self.sessions.lock().await;
+
+        sessions.get(&channel).cloned()
     }
 }
 
 struct ShenronHandler<A> {
     app: Arc<A>,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
-    sessions: Arc<Mutex<HashMap<ChannelId, Session>>>,
+    sessions: SessionMap,
 }
 
 impl<A> server::Handler for ShenronHandler<A>
@@ -186,8 +202,8 @@ where
         channel: ChannelId,
         col_width: u32,
         row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
+        pix_width: u32,
+        pix_height: u32,
         _session: &mut RusshSession,
     ) -> Result<()> {
         tracing::debug!(
@@ -197,7 +213,18 @@ where
             row_height
         );
 
-        // TODO: forward window change to app
+        let size = PtySize {
+            width: col_width,
+            height: row_height,
+            pixel_width: pix_width,
+            pixel_height: pix_height,
+        };
+
+        let Some(session) = self.sessions.get(channel).await else {
+            return Err(crate::Error::Custom("Reize failed".into()));
+        };
+
+        session.resize(size)?;
 
         Ok(())
     }
