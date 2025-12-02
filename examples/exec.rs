@@ -39,5 +39,5 @@ async fn app(session: Session) -> shenron::Result<()> {
         session.write_str(&output).await?;
     }
 
-    session.close().await
+    session.exit(0).await
 }

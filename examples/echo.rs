@@ -30,7 +30,7 @@ async fn echo(mut session: Session) -> Result<()> {
         }
     }
 
-    session.close().await?;
+    session.exit(0).await?;
 
     Ok(())
 }

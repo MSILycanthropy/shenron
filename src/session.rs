@@ -157,12 +157,13 @@ impl Session {
         self.write(s.as_bytes()).await
     }
 
-    /// Close the session
+    /// Exit the session with a status code (0 = success)
     ///
     /// # Errors
-    ///
     /// Returns `Err` if closing fails
-    pub async fn close(&self) -> crate::Result<()> {
+    pub async fn exit(&self, code: u32) -> crate::Result<()> {
+        self.channel.exit_status(code).await?;
+        self.channel.eof().await?;
         self.channel.close().await.map_err(crate::Error::Ssh)
     }
 
