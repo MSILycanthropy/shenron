@@ -19,6 +19,7 @@ pub struct Server {
     keys: Vec<PrivateKey>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
     auth: AuthConfig,
+    app: Option<Arc<dyn ErasedHandler>>,
 }
 
 impl Server {
@@ -109,26 +110,15 @@ impl Server {
     }
 
     /// Set the application handler
-    pub fn app<H: Handler>(self, handler: H) -> RunnableServer {
-        let chain = middleware::build_chain(handler, self.middleware);
+    #[must_use]
+    pub fn app<H: Handler>(mut self, handler: H) -> Self {
+        let chain = middleware::build_chain(handler, std::mem::take(&mut self.middleware));
 
-        RunnableServer {
-            addr: self.addr,
-            keys: self.keys,
-            handler: chain,
-            auth: Arc::new(self.auth),
-        }
+        self.app = Some(chain);
+
+        self
     }
-}
 
-pub struct RunnableServer {
-    addr: Option<String>,
-    keys: Vec<PrivateKey>,
-    handler: Arc<dyn ErasedHandler>,
-    auth: Arc<AuthConfig>,
-}
-
-impl RunnableServer {
     /// Start the server and listen for connections
     ///
     /// # Errors
@@ -146,17 +136,19 @@ impl RunnableServer {
             return Err(crate::Error::Config("No host keys specified".into()));
         }
 
+        let handler = self
+            .app
+            .ok_or_else(|| crate::Error::Config("No app handler specified".into()))?;
+
         let config = Config {
             keys: self.keys,
             ..Default::default()
         };
-
         let config = Arc::new(config);
 
-        let mut sh = ShenronServer {
-            handler: self.handler,
-            auth: self.auth,
-        };
+        let auth = Arc::new(self.auth);
+
+        let mut sh = ShenronServer { handler, auth };
 
         sh.run_on_address(config, addr).await?;
 
