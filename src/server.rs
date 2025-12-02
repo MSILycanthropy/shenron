@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, sync::Arc};
 
 use russh::{
     Channel, MethodKind,
@@ -13,6 +13,8 @@ use crate::{
     session::PtySize,
 };
 
+type ShutdownFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+
 #[derive(Default)]
 pub struct Server {
     addr: Option<String>,
@@ -20,6 +22,7 @@ pub struct Server {
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
     auth: AuthConfig,
     app: Option<Arc<dyn ErasedHandler>>,
+    shutdown: Option<ShutdownFuture>,
 }
 
 impl Server {
@@ -119,6 +122,32 @@ impl Server {
         self
     }
 
+    /// Set a graceful shutdown signal
+    ///
+    /// When the future completes, the server will stop accepting new connections.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// Server::new()
+    ///     .bind("127.0.0.1:2222")
+    ///     .host_key_file("host_key")?
+    ///     .with_graceful_shutdown(async {
+    ///         tokio::signal::ctrl_c().await.ok();
+    ///     })
+    ///     .app(app)
+    ///     .serve()
+    ///     .await
+    /// ```
+    #[must_use]
+    pub fn shutdown_signal<F>(mut self, signal: F) -> Self
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.shutdown = Some(Box::pin(signal));
+        self
+    }
+
     /// Start the server and listen for connections
     ///
     /// # Errors
@@ -150,7 +179,21 @@ impl Server {
 
         let mut sh = ShenronServer { handler, auth };
 
-        sh.run_on_address(config, addr).await?;
+        match self.shutdown {
+            Some(shutdown) => {
+                tokio::select! {
+                    result = sh.run_on_address(config, addr) => {
+                        result?;
+                    }
+                    () = shutdown => {
+                        tracing::info!("Shutdown signal received");
+                    }
+                }
+            }
+            None => {
+                sh.run_on_address(config, addr).await?;
+            }
+        }
 
         Ok(())
     }
