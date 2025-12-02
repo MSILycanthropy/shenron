@@ -3,11 +3,11 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use russh::{
     Channel, ChannelId,
     keys::PrivateKey,
-    server::{self, Auth, Config, Msg, Server as _, Session},
+    server::{self, Auth, Config, Msg, Server as _, Session as RusshSession},
 };
 use tokio::sync::Mutex;
 
-use crate::{App, Result};
+use crate::{App, Result, session::Session};
 
 #[derive(Default)]
 pub struct Server<A> {
@@ -93,6 +93,7 @@ where
         ShenronHandler {
             app: Arc::clone(&self.app),
             channels: Arc::new(Mutex::new(HashMap::new())),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -100,6 +101,7 @@ where
 struct ShenronHandler<A> {
     app: Arc<A>,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    sessions: Arc<Mutex<HashMap<ChannelId, Session>>>,
 }
 
 impl<A> server::Handler for ShenronHandler<A>
@@ -111,7 +113,7 @@ where
     async fn channel_open_session(
         &mut self,
         channel: Channel<russh::server::Msg>,
-        _session: &mut russh::server::Session,
+        _session: &mut RusshSession,
     ) -> Result<bool> {
         tracing::info!("Channel opened: {:?}", channel.id());
 
@@ -149,7 +151,7 @@ where
         _pix_width: u32,
         _pix_height: u32,
         _modes: &[(russh::Pty, u32)],
-        session: &mut Session,
+        session: &mut RusshSession,
     ) -> Result<()> {
         tracing::info!(
             "PTY request on channel {:?}: {}x{} ({})",
@@ -159,9 +161,9 @@ where
             term
         );
 
-        // TODO: impl actually hap handler
+        // TODO: impl actually app handler
 
-        session.channel_success(channel);
+        session.channel_success(channel)?;
 
         Ok(())
     }
@@ -170,7 +172,7 @@ where
         &mut self,
         channel: ChannelId,
         data: &[u8],
-        _session: &mut Session,
+        _session: &mut RusshSession,
     ) -> Result<()> {
         tracing::debug!("Data on channel: {:?}: {} bytes", channel, data.len());
 
@@ -186,7 +188,7 @@ where
         row_height: u32,
         _pix_width: u32,
         _pix_height: u32,
-        _session: &mut Session,
+        _session: &mut RusshSession,
     ) -> Result<()> {
         tracing::debug!(
             "Window change on channel {:?}: {}x{}",
