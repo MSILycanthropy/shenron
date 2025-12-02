@@ -2,6 +2,8 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use russh::{Channel, ChannelMsg, server::Msg};
 
+pub use russh::Sig as Signal;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
     pub width: u32,
@@ -14,6 +16,7 @@ pub struct PtySize {
 pub enum Event {
     Input(Vec<u8>),
     Resize(PtySize),
+    Signal(Signal),
     Eof,
 }
 
@@ -74,6 +77,7 @@ impl Session {
 
                     return Some(Event::Resize(new_size));
                 }
+                ChannelMsg::Signal { signal } => return Some(Event::Signal(signal)),
                 ChannelMsg::Eof => return Some(Event::Eof),
 
                 // Skip protocol messages

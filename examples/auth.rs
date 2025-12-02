@@ -14,7 +14,7 @@ async fn whoami(mut session: Session) -> Result<()> {
     while let Some(event) = session.next().await {
         match event {
             Event::Input(_) | Event::Eof => break,
-            Event::Resize(_) => {}
+            _ => {}
         }
     }
 

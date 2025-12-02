@@ -27,6 +27,7 @@ async fn echo(mut session: Session) -> Result<()> {
                 tracing::debug!("Resized to {}x{}", size.width, size.height);
             }
             Event::Eof => break,
+            Event::Signal(_) => {}
         }
     }
 

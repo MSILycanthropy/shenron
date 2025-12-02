@@ -386,11 +386,6 @@ impl russh::server::Handler for ShenronHandler {
         channel_id: russh::ChannelId,
         session: &mut RusshSession,
     ) -> crate::Result<()> {
-        tracing::info!(
-            "shell_request called, channel present: {}",
-            self.channel.is_some()
-        );
-
         let channel = self
             .channel
             .take()
