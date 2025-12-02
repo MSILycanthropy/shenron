@@ -21,6 +21,9 @@ pub enum Error {
     #[error("Authentication failed")]
     AuthFailed,
 
+    #[error("Session not found")]
+    SessionNotFound,
+
     #[error("{0}")]
     Custom(String),
 }
