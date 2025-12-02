@@ -1,6 +1,9 @@
 use std::{thread::sleep, time::Duration};
 
-use shenron::{Result, Server, Session, middleware::builtins::Comment};
+use shenron::{
+    Result, Server, Session,
+    middleware::builtins::{Comment, elapsed},
+};
 
 async fn sleep_and_die(session: Session) -> Result<Session> {
     session.write_str("Welcome to Shenron!\r\n").await?;
@@ -26,7 +29,8 @@ async fn main() -> Result<()> {
     Server::new()
         .bind("0.0.0.0:2222")
         .host_key(key)
-        .with(Comment("Cya! Wouldn't wanna be ya!".into()))
+        .with(Comment("Cya! Wouldn't wanna be ya!\r\n".into()))
+        .with(elapsed)
         .app(sleep_and_die)
         .serve()
         .await
