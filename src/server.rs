@@ -215,6 +215,7 @@ impl russh::server::Server for ShenronServer {
             user: None,
             auth: Arc::clone(&self.auth),
             env: HashMap::new(),
+            pty: None,
         }
     }
 }
@@ -226,6 +227,7 @@ struct ShenronHandler {
     user: Option<String>,
     auth: Arc<AuthConfig>,
     env: HashMap<String, String>,
+    pty: Option<(String, PtySize)>,
 }
 
 impl russh::server::Handler for ShenronHandler {
@@ -323,8 +325,11 @@ impl russh::server::Handler for ShenronHandler {
             .take()
             .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
 
-        let kind = crate::SessionKind::Exec {
-            command: String::from_utf8_lossy(data).to_string(),
+        let command = String::from_utf8_lossy(data).to_string();
+
+        let kind = match self.pty.take() {
+            Some((term, size)) => crate::SessionKind::Pty { term, size },
+            None => crate::SessionKind::Exec { command },
         };
 
         let user = self.user.clone().unwrap_or_else(|| "unknown".into());
@@ -361,40 +366,15 @@ impl russh::server::Handler for ShenronHandler {
         _modes: &[(russh::Pty, u32)],
         session: &mut RusshSession,
     ) -> crate::Result<()> {
-        let channel = self
-            .channel
-            .take()
-            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
-
-        let pty_size = PtySize {
-            width: col_width,
-            height: row_height,
-            pixel_width: pix_width,
-            pixel_height: pix_height,
-        };
-
-        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
-
-        let kind = crate::SessionKind::Pty {
-            term: term.to_string(),
-            size: pty_size,
-        };
-
-        let app_session = crate::Session::new(
-            channel,
-            kind,
-            user,
-            std::mem::take(&mut self.env),
-            self.remote_addr,
-        );
-
-        let handler = Arc::clone(&self.handler);
-
-        tokio::spawn(async move {
-            if let Err(e) = handler.call(app_session).await {
-                tracing::error!("Handler error: {}", e);
-            }
-        });
+        self.pty = Some((
+            term.to_string(),
+            PtySize {
+                width: col_width,
+                height: row_height,
+                pixel_width: pix_width,
+                pixel_height: pix_height,
+            },
+        ));
 
         session.channel_success(channel_id)?;
 
@@ -406,6 +386,11 @@ impl russh::server::Handler for ShenronHandler {
         channel_id: russh::ChannelId,
         session: &mut RusshSession,
     ) -> crate::Result<()> {
+        tracing::info!(
+            "shell_request called, channel present: {}",
+            self.channel.is_some()
+        );
+
         let channel = self
             .channel
             .take()
@@ -413,9 +398,14 @@ impl russh::server::Handler for ShenronHandler {
 
         let user = self.user.clone().unwrap_or_else(|| "unknown".into());
 
+        let kind = match self.pty.take() {
+            Some((term, size)) => crate::SessionKind::Pty { term, size },
+            None => crate::SessionKind::Shell,
+        };
+
         let app_session = crate::Session::new(
             channel,
-            crate::SessionKind::Shell,
+            kind,
             user,
             std::mem::take(&mut self.env),
             self.remote_addr,
