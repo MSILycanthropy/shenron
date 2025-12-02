@@ -1,3 +1,4 @@
+pub mod auth;
 mod error;
 mod handler;
 pub mod middleware;

@@ -1,13 +1,14 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use russh::{
-    Channel,
+    Channel, MethodKind,
     keys::{PrivateKey, PublicKey},
-    server::{Config, Msg, Server as _, Session as RusshSession},
+    server::{Auth, Config, Msg, Server as _, Session as RusshSession},
 };
 
 use crate::{
     Handler,
+    auth::AuthConfig,
     middleware::{self, ErasedHandler, ErasedMiddleware, Middleware},
     session::PtySize,
 };
@@ -17,6 +18,7 @@ pub struct Server {
     addr: Option<String>,
     keys: Vec<PrivateKey>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
+    auth: AuthConfig,
 }
 
 impl Server {
@@ -59,7 +61,54 @@ impl Server {
         self
     }
 
-    /// Set the handler and prepare to run the server
+    /// Set a password authentication handler
+    ///
+    /// The handler receives the username and password and returns
+    /// a boolean representing if the connection is accepted or rejected
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// Server::new()
+    ///     .password_auth(|user, password| async move {
+    ///         user == "admin" && password == "admin"
+    ///     })
+    /// ```
+    #[must_use]
+    pub fn password_auth<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        self.auth.password = Some(Arc::new(handler));
+
+        self
+    }
+
+    /// Set a public key authentication handler
+    ///
+    /// The handler receives the username and public key, and returns
+    /// a boolean representing if the connection is accepted or rejected.
+    ///
+    /// # Example
+    /// ```rust
+    ///  Server::new()
+    ///     .pubkey_auth(|user, key| async move {
+    ///         allowed_keys.contains(&key.fingerprint())
+    ///     })
+    /// ```
+    #[must_use]
+    pub fn pubkey_auth<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, PublicKey) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        self.auth.pubkey = Some(Arc::new(handler));
+
+        self
+    }
+
+    /// Set the application handler
     pub fn app<H: Handler>(self, handler: H) -> RunnableServer {
         let chain = middleware::build_chain(handler, self.middleware);
 
@@ -67,6 +116,7 @@ impl Server {
             addr: self.addr,
             keys: self.keys,
             handler: chain,
+            auth: Arc::new(self.auth),
         }
     }
 }
@@ -75,6 +125,7 @@ pub struct RunnableServer {
     addr: Option<String>,
     keys: Vec<PrivateKey>,
     handler: Arc<dyn ErasedHandler>,
+    auth: Arc<AuthConfig>,
 }
 
 impl RunnableServer {
@@ -104,6 +155,7 @@ impl RunnableServer {
 
         let mut sh = ShenronServer {
             handler: self.handler,
+            auth: self.auth,
         };
 
         sh.run_on_address(config, addr).await?;
@@ -114,6 +166,7 @@ impl RunnableServer {
 
 struct ShenronServer {
     handler: Arc<dyn ErasedHandler>,
+    auth: Arc<AuthConfig>,
 }
 
 impl russh::server::Server for ShenronServer {
@@ -125,6 +178,7 @@ impl russh::server::Server for ShenronServer {
             remote_addr: addr.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
             channel: None,
             user: None,
+            auth: Arc::clone(&self.auth),
         }
     }
 }
@@ -134,6 +188,7 @@ struct ShenronHandler {
     remote_addr: SocketAddr,
     channel: Option<Channel<Msg>>,
     user: Option<String>,
+    auth: Arc<AuthConfig>,
 }
 
 impl russh::server::Handler for ShenronHandler {
@@ -149,28 +204,62 @@ impl russh::server::Handler for ShenronHandler {
         Ok(true)
     }
 
-    async fn auth_publickey(
-        &mut self,
-        user: &str,
-        _public_key: &PublicKey,
-    ) -> crate::Result<russh::server::Auth> {
-        // TODO: configing auth
+    async fn auth_publickey(&mut self, user: &str, public_key: &PublicKey) -> crate::Result<Auth> {
+        let mut accept = || -> crate::Result<Auth> {
+            self.user = Some(user.to_string());
 
-        self.user = Some(user.to_string());
+            Ok(Auth::Accept)
+        };
 
-        Ok(russh::server::Auth::Accept)
+        let rejection = Ok(Auth::Reject {
+            proceed_with_methods: Some([MethodKind::Password].as_slice().into()),
+            partial_success: false,
+        });
+
+        if let Some(ref handler) = self.auth.pubkey {
+            if handler.verify(user, public_key).await {
+                return accept();
+            }
+
+            return rejection;
+        }
+
+        if self.auth.is_empty() {
+            return accept();
+        }
+
+        rejection
     }
 
     async fn auth_password(
         &mut self,
         user: &str,
-        _password: &str,
+        password: &str,
     ) -> crate::Result<russh::server::Auth> {
-        // TODO: configing auth
+        let mut accept = || -> crate::Result<Auth> {
+            self.user = Some(user.to_string());
 
-        self.user = Some(user.to_string());
+            Ok(Auth::Accept)
+        };
 
-        Ok(russh::server::Auth::Accept)
+        let rejection = Ok(Auth::Reject {
+            proceed_with_methods: None,
+            partial_success: false,
+        });
+
+        if let Some(ref handler) = self.auth.password {
+            if handler.verify(user, password).await {
+                return accept();
+            }
+
+            return rejection;
+        }
+
+        if self.auth.is_empty() {
+            return accept();
+        }
+
+        rejection
     }
 
     async fn pty_request(
