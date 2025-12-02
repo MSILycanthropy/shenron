@@ -264,7 +264,7 @@ fn run_handler(handler: Arc<dyn ErasedHandler>, session: Session) {
     tokio::spawn(async move {
         match handler.call(session).await {
             Ok(session) => {
-                let _ = session.abort().await;
+                let _ = session.do_exit().await;
             }
             Err(e) => {
                 tracing::error!("Handler error: {}", e);

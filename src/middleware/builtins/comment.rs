@@ -1,5 +1,6 @@
 use crate::{Middleware, Next, Result, Session};
 
+/// Middleware to print a message at the end of a session
 #[derive(Clone)]
 pub struct Comment(pub String);
 

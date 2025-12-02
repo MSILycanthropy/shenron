@@ -177,6 +177,27 @@ impl Session {
     }
 
     #[must_use]
+    pub const fn exit_code(&self) -> Option<u32> {
+        self.exit_code
+    }
+
+    /// Set exit code and exit immediately
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if
+    ///   - Setting exit status fails
+    ///   - Sending the eof message fails
+    ///   - Closing the channel fails
+    pub async fn abort(mut self, code: u32) -> crate::Result<Self> {
+        self.exit_code = Some(code);
+
+        self.do_exit().await?;
+
+        Ok(self)
+    }
+
+    #[must_use]
     pub const fn will_exit(&self) -> bool {
         self.exit_code.is_some()
     }
@@ -191,7 +212,7 @@ impl Session {
         &self.channel
     }
 
-    pub(crate) async fn abort(&self) -> crate::Result<()> {
+    pub(crate) async fn do_exit(&self) -> crate::Result<()> {
         let Some(exit_code) = self.exit_code else {
             return Ok(());
         };
