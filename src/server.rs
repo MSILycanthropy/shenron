@@ -5,7 +5,7 @@ use russh::{
     keys::PrivateKey,
     server::{self, Auth, Config, Msg, Server as _, Session as RusshSession},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     App, Result,
@@ -103,14 +103,24 @@ where
 
 #[derive(Default)]
 struct SessionMap {
-    sessions: Arc<Mutex<HashMap<ChannelId, Arc<Session>>>>,
+    sessions: Arc<Mutex<HashMap<ChannelId, Arc<RwLock<Session>>>>>,
 }
 
 impl SessionMap {
-    async fn get(&self, channel: ChannelId) -> Option<Arc<Session>> {
+    async fn get(&self, channel: ChannelId) -> Option<Arc<RwLock<Session>>> {
         let sessions = self.sessions.lock().await;
 
         sessions.get(&channel).cloned()
+    }
+
+    async fn insert(
+        &mut self,
+        channel: ChannelId,
+        session: Arc<RwLock<Session>>,
+    ) -> Option<Arc<RwLock<Session>>> {
+        let mut sessions = self.sessions.lock().await;
+
+        sessions.insert(channel, session)
     }
 }
 
@@ -164,8 +174,8 @@ where
         term: &str,
         col_width: u32,
         row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
+        pix_width: u32,
+        pix_height: u32,
         _modes: &[(russh::Pty, u32)],
         session: &mut RusshSession,
     ) -> Result<()> {
@@ -177,7 +187,43 @@ where
             term
         );
 
-        // TODO: impl actually app handler
+        let app_session = crate::Session::new();
+
+        app_session
+            .set_pty_size(PtySize {
+                width: col_width,
+                height: row_height,
+                pixel_width: pix_width,
+                pixel_height: pix_height,
+            })
+            .await;
+
+        let app_session = Arc::new(RwLock::new(app_session));
+
+        self.sessions
+            .insert(channel, Arc::clone(&app_session))
+            .await;
+
+        let channels = Arc::clone(&self.channels);
+
+        tokio::spawn(async move {
+            let mut app_session = app_session.write().await;
+
+            while let Some(data) = app_session.read().await {
+                let channels = channels.lock().await;
+                let channel_id = channel;
+
+                if let Some(channel) = channels.get(&channel_id) {
+                    if let Err(e) = channel.data(data.as_slice()).await {
+                        tracing::error!("Failed to send data to channel {:?}: {}", channel_id, e);
+
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        });
 
         session.channel_success(channel)?;
 
@@ -192,7 +238,11 @@ where
     ) -> Result<()> {
         tracing::debug!("Data on channel: {:?}: {} bytes", channel, data.len());
 
-        // TODO: forward data to app
+        let Some(session) = self.sessions.get(channel).await else {
+            return Err(crate::Error::Custom("Failed to send data".into()));
+        };
+
+        session.read().await.write(data).await?;
 
         Ok(())
     }
@@ -224,7 +274,7 @@ where
             return Err(crate::Error::Custom("Reize failed".into()));
         };
 
-        session.resize(size)?;
+        session.read().await.resize(size)?;
 
         Ok(())
     }

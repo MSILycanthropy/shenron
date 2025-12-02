@@ -45,12 +45,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(user: String) -> Self {
+    pub(crate) fn new() -> Self {
         let (input, output) = mpsc::channel::<Vec<u8>>(32);
         let (resize_input, resize_output) = mpsc::channel::<PtySize>(8);
 
         Self {
-            user,
+            user: "TODO: Figure this out".into(),
             pty_size: Arc::new(RwLock::new(PtySize::default())),
             env: HashMap::new(),
             term: String::from("xterm"),
