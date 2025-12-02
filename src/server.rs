@@ -114,7 +114,7 @@ impl SessionMap {
     }
 
     async fn insert(
-        &mut self,
+        &self,
         channel: ChannelId,
         session: Arc<RwLock<Session>>,
     ) -> Option<Arc<RwLock<Session>>> {
