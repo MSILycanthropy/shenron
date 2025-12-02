@@ -5,4 +5,5 @@ pub enum SessionKind {
     Pty { term: String, size: PtySize },
     Exec { command: String },
     Shell,
+    Subsystem { name: String },
 }

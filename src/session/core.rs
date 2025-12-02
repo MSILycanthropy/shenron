@@ -92,6 +92,14 @@ impl Session {
     }
 
     #[must_use]
+    pub fn subsystem(&self) -> Option<&str> {
+        match &self.kind {
+            SessionKind::Subsystem { name } => Some(name),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn pty_size(&self) -> Option<PtySize> {
         let pty = self.pty()?;
 

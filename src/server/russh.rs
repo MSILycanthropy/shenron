@@ -6,7 +6,7 @@ use russh::{
     server::{Auth, Msg, Session as RusshSession},
 };
 
-use crate::{PtySize, auth::AuthConfig, middleware::ErasedHandler};
+use crate::{PtySize, SessionKind, auth::AuthConfig, middleware::ErasedHandler};
 
 pub(crate) struct ShenronServer {
     pub(crate) handler: Arc<dyn ErasedHandler>,
@@ -210,6 +210,42 @@ impl russh::server::Handler for ShenronHandler {
         let app_session = crate::Session::new(
             channel,
             kind,
+            user,
+            std::mem::take(&mut self.env),
+            self.remote_addr,
+        );
+
+        let handler = Arc::clone(&self.handler);
+
+        tokio::spawn(async move {
+            if let Err(e) = handler.call(app_session).await {
+                tracing::error!("Handler error: {}", e);
+            }
+        });
+
+        session.channel_success(channel_id)?;
+
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel_id: russh::ChannelId,
+        name: &str,
+        session: &mut RusshSession,
+    ) -> crate::Result<()> {
+        let channel = self
+            .channel
+            .take()
+            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
+
+        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
+
+        let app_session = crate::Session::new(
+            channel,
+            SessionKind::Subsystem {
+                name: name.to_string(),
+            },
             user,
             std::mem::take(&mut self.env),
             self.remote_addr,

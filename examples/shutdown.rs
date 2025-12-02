@@ -49,6 +49,7 @@ async fn app(mut session: Session) -> shenron::Result<()> {
         SessionKind::Exec { command } => {
             session.write_str(&format!("Executed: {command}\n")).await?;
         }
+        SessionKind::Subsystem { .. } => {}
     }
 
     session.exit(0).await
