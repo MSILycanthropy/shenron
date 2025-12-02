@@ -17,11 +17,16 @@ pub enum Event {
     Eof,
 }
 
+#[derive(Clone)]
+pub enum SessionKind {
+    Pty { term: String, size: PtySize },
+    Exec { command: String },
+}
+
 pub struct Session {
     channel: Channel<Msg>,
-    pty_size: PtySize,
+    kind: SessionKind,
     user: String,
-    term: String,
     env: HashMap<String, String>,
     remote_addr: SocketAddr,
 }
@@ -29,17 +34,15 @@ pub struct Session {
 impl Session {
     pub(crate) const fn new(
         channel: Channel<Msg>,
-        pty_size: PtySize,
+        kind: SessionKind,
         user: String,
-        term: String,
         env: HashMap<String, String>,
         remote_addr: SocketAddr,
     ) -> Self {
         Self {
             channel,
-            pty_size,
+            kind,
             user,
-            term,
             env,
             remote_addr,
         }
@@ -57,14 +60,18 @@ impl Session {
                     pix_width,
                     pix_height,
                 } => {
-                    self.pty_size = PtySize {
+                    let new_size = PtySize {
                         width: col_width,
                         height: row_height,
                         pixel_width: pix_width,
                         pixel_height: pix_height,
                     };
 
-                    return Some(Event::Resize(self.pty_size));
+                    if let SessionKind::Pty { ref mut size, .. } = self.kind {
+                        *size = new_size;
+                    }
+
+                    return Some(Event::Resize(new_size));
                 }
                 ChannelMsg::Eof => return Some(Event::Eof),
 
@@ -82,13 +89,38 @@ impl Session {
     }
 
     #[must_use]
-    pub const fn pty_size(&self) -> PtySize {
-        self.pty_size
+    pub fn kind(&self) -> SessionKind {
+        self.kind.clone()
     }
 
     #[must_use]
-    pub fn term(&self) -> &str {
-        &self.term
+    pub fn pty(&self) -> Option<(&str, PtySize)> {
+        match &self.kind {
+            SessionKind::Pty { term, size } => Some((term, *size)),
+            SessionKind::Exec { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn command(&self) -> Option<&str> {
+        match &self.kind {
+            SessionKind::Exec { command } => Some(command),
+            SessionKind::Pty { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn pty_size(&self) -> Option<PtySize> {
+        let pty = self.pty()?;
+
+        Some(pty.1)
+    }
+
+    #[must_use]
+    pub fn term(&self) -> Option<&str> {
+        let pty = self.pty()?;
+
+        Some(pty.0)
     }
 
     #[must_use]

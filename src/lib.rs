@@ -9,4 +9,4 @@ pub use error::{Error, Result};
 pub use handler::Handler;
 pub use middleware::{Middleware, Next};
 pub use server::Server;
-pub use session::{Event, PtySize, Session};
+pub use session::{Event, PtySize, Session, SessionKind};

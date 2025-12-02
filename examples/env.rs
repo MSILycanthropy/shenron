@@ -2,9 +2,13 @@ use shenron::{Server, Session};
 
 #[tokio::main]
 async fn main() -> shenron::Result<()> {
+    let key =
+        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
+            .expect("Failed to create key");
+
     Server::new()
-        .bind("127.0.0.1:2222")
-        .host_key_file("host_key")?
+        .bind("0.0.0.0:2222")
+        .host_key(key)
         .app(app)
         .serve()
         .await
@@ -29,7 +33,10 @@ async fn app(session: Session) -> shenron::Result<()> {
 
     session.write_str("\r\nSession info:\r\n").await?;
     session
-        .write_str(&format!("  TERM={}\r\n", session.term()))
+        .write_str(&format!(
+            "  TERM={}\r\n",
+            session.term().expect("Not a pty session")
+        ))
         .await?;
     session
         .write_str(&format!("  USER={}\r\n", session.user()))
