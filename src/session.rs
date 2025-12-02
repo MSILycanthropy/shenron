@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use russh::{ChannelId, server::Handle};
 use tokio::sync::{RwLock, mpsc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +28,8 @@ pub(crate) type ResizeTx = mpsc::Sender<PtySize>;
 pub(crate) type ResizeRx = mpsc::Receiver<PtySize>;
 
 pub struct Session {
+    pub id: ChannelId,
+
     pub user: String,
 
     pty_size: Arc<RwLock<PtySize>>,
@@ -34,6 +37,8 @@ pub struct Session {
     pub env: HashMap<String, String>,
 
     pub term: String,
+
+    pub(crate) handle: Handle,
 
     pub(crate) input: Input,
 
@@ -43,8 +48,15 @@ pub struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(input: Input, output: Output, resize_rx: ResizeRx) -> Self {
+    pub(crate) fn new(
+        handle: Handle,
+        id: ChannelId,
+        input: Input,
+        output: Output,
+        resize_rx: ResizeRx,
+    ) -> Self {
         Self {
+            id,
             user: "TODO: Figure this out".into(),
             pty_size: Arc::new(RwLock::new(PtySize::default())),
             env: HashMap::new(),
@@ -52,6 +64,7 @@ impl Session {
             input,
             output,
             resize_rx,
+            handle,
         }
     }
 
@@ -88,5 +101,15 @@ impl Session {
 
     pub fn try_recv_resize(&mut self) -> Option<PtySize> {
         self.resize_rx.try_recv().ok()
+    }
+
+    /// # Errors
+    ///
+    /// Will return `Err` if russh fails to close the session
+    pub async fn end(&self) -> crate::Result<()> {
+        self.handle
+            .close(self.id)
+            .await
+            .map_err(|()| crate::Error::Custom("Failed to end session".into()))
     }
 }

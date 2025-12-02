@@ -5,11 +5,11 @@ use russh::{
     keys::PrivateKey,
     server::{self, Auth, Config, Msg, Server as _, Session as RusshSession},
 };
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::{
     App, Result,
-    session::{Input, Output, PtySize, ResizeRx, ResizeTx, Session},
+    session::{PtySize, ResizeTx},
 };
 
 #[derive(Default)]
@@ -170,7 +170,8 @@ where
         let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(32);
         let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(8);
 
-        let app_session = crate::session::Session::new(input_rx, output_tx, resize_rx);
+        let app_session =
+            crate::session::Session::new(session.handle(), channel, input_rx, output_tx, resize_rx);
 
         app_session
             .set_pty_size(PtySize {
@@ -226,14 +227,14 @@ where
     ) -> Result<()> {
         tracing::debug!("Data on channel: {:?}: {} bytes", channel, data.len());
 
-        if let Some(input_tx) = self.inputs.lock().await.get(&channel) {
-            if let Err(e) = input_tx.send(data.to_vec()).await {
-                tracing::error!(
-                    "Failed to send input to app on channel {:?}: {}",
-                    channel,
-                    e
-                );
-            }
+        if let Some(input_tx) = self.inputs.lock().await.get(&channel)
+            && let Err(e) = input_tx.send(data.to_vec()).await
+        {
+            tracing::error!(
+                "Failed to send input to app on channel {:?}: {}",
+                channel,
+                e
+            );
         }
 
         Ok(())
@@ -262,14 +263,14 @@ where
             pixel_height: pix_height,
         };
 
-        if let Some(resize_tx) = self.resizes.lock().await.get(&channel) {
-            if let Err(e) = resize_tx.send(size).await {
-                tracing::error!(
-                    "Failed to send resize to app on channel {:?}: {}",
-                    channel,
-                    e
-                );
-            }
+        if let Some(resize_tx) = self.resizes.lock().await.get(&channel)
+            && let Err(e) = resize_tx.send(size).await
+        {
+            tracing::error!(
+                "Failed to send resize to app on channel {:?}: {}",
+                channel,
+                e
+            );
         }
         Ok(())
     }

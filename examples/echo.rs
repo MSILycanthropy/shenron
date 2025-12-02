@@ -21,6 +21,7 @@ impl App for EchoServer {
         while let Some(data) = session.read().await {
             if data.contains(&3) || data.contains(&4) {
                 session.write_str("\r\nGoodbye!\r\n").await?;
+                session.end().await?;
                 break;
             }
 
