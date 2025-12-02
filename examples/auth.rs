@@ -20,6 +20,7 @@ async fn whoami(mut session: Session) -> Result<()> {
 
     session.write_str("Goodbye!\r\n").await?;
     session.exit(0).await?;
+
     Ok(())
 }
 

@@ -33,7 +33,12 @@ async fn app(session: Session) -> shenron::Result<()> {
                 }
             }
             "help" => "Available commands: whoami, date, uptime, env, help\n".to_string(),
-            other => format!("Unknown command: {other}\n"),
+            other => {
+                session
+                    .write_stderr_str(&format!("Unknown command: {other}\n"))
+                    .await?;
+                return session.exit(127).await;
+            }
         };
 
         session.write_str(&output).await?;

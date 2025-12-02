@@ -157,6 +157,27 @@ impl Session {
         self.write(s.as_bytes()).await
     }
 
+    /// Write to stderr on the channel
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the message fails to send
+    pub async fn write_stderr(&self, data: &[u8]) -> crate::Result<()> {
+        self.channel
+            .extended_data(1, data)
+            .await
+            .map_err(crate::Error::Ssh)
+    }
+
+    /// Write a string to stderr on the channel
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the message fails to send
+    pub async fn write_stderr_str(&self, s: &str) -> crate::Result<()> {
+        self.write_stderr(s.as_bytes()).await
+    }
+
     /// Exit the session with a status code (0 = success)
     ///
     /// # Errors
