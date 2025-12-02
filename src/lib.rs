@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
-use crate::session::Session;
+pub use crate::server::Server;
+pub use crate::session::Session;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

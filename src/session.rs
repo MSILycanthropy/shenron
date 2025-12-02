@@ -21,10 +21,10 @@ impl Default for PtySize {
     }
 }
 
-pub(crate) type Input = mpsc::Sender<Vec<u8>>;
-pub(crate) type Output = mpsc::Receiver<Vec<u8>>;
-pub(crate) type ResizeInput = mpsc::Sender<PtySize>;
-pub(crate) type ResizeOutput = mpsc::Receiver<PtySize>;
+pub(crate) type Input = mpsc::Receiver<Vec<u8>>;
+pub(crate) type Output = mpsc::Sender<Vec<u8>>;
+pub(crate) type ResizeTx = mpsc::Sender<PtySize>;
+pub(crate) type ResizeRx = mpsc::Receiver<PtySize>;
 
 pub struct Session {
     pub user: String,
@@ -39,16 +39,11 @@ pub struct Session {
 
     pub(crate) output: Output,
 
-    pub(crate) resize_input: ResizeInput,
-
-    pub(crate) resize_output: ResizeOutput,
+    pub(crate) resize_rx: ResizeRx,
 }
 
 impl Session {
-    pub(crate) fn new() -> Self {
-        let (input, output) = mpsc::channel::<Vec<u8>>(32);
-        let (resize_input, resize_output) = mpsc::channel::<PtySize>(8);
-
+    pub(crate) fn new(input: Input, output: Output, resize_rx: ResizeRx) -> Self {
         Self {
             user: "TODO: Figure this out".into(),
             pty_size: Arc::new(RwLock::new(PtySize::default())),
@@ -56,8 +51,7 @@ impl Session {
             term: String::from("xterm"),
             input,
             output,
-            resize_input,
-            resize_output,
+            resize_rx,
         }
     }
 
@@ -69,21 +63,17 @@ impl Session {
         *self.pty_size.write().await = size;
     }
 
-    pub(crate) fn resize(&self, size: PtySize) -> crate::Result<()> {
-        self.resize_input
-            .try_send(size)
-            .map_err(|_| crate::Error::Custom("Failed to resize".into()))
-    }
-
     pub async fn read(&mut self) -> Option<Vec<u8>> {
-        self.output.recv().await
+        self.input.recv().await
     }
 
     /// # Errors
     ///
     /// Will return `Err` if data failed to send
     pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
-        self.input
+        tracing::debug!("Attemping to write {:?} to ouput", &data);
+
+        self.output
             .send(data.to_vec())
             .await
             .map_err(|_| crate::Error::Custom("Failed to send data".into()))
@@ -96,7 +86,7 @@ impl Session {
         self.write(s.as_bytes()).await
     }
 
-    pub fn try_revc_resive(&mut self) -> Option<PtySize> {
-        self.resize_output.try_recv().ok()
+    pub fn try_recv_resize(&mut self) -> Option<PtySize> {
+        self.resize_rx.try_recv().ok()
     }
 }
