@@ -357,4 +357,37 @@ impl russh::server::Handler for ShenronHandler {
 
         Ok(())
     }
+
+    async fn shell_request(
+        &mut self,
+        channel_id: russh::ChannelId,
+        session: &mut RusshSession,
+    ) -> crate::Result<()> {
+        let channel = self
+            .channel
+            .take()
+            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
+
+        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
+
+        let app_session = crate::Session::new(
+            channel,
+            crate::SessionKind::Shell,
+            user,
+            std::mem::take(&mut self.env),
+            self.remote_addr,
+        );
+
+        let handler = Arc::clone(&self.handler);
+
+        tokio::spawn(async move {
+            if let Err(e) = handler.call(app_session).await {
+                tracing::error!("Handler error: {}", e);
+            }
+        });
+
+        session.channel_success(channel_id)?;
+
+        Ok(())
+    }
 }

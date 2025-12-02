@@ -21,6 +21,7 @@ pub enum Event {
 pub enum SessionKind {
     Pty { term: String, size: PtySize },
     Exec { command: String },
+    Shell,
 }
 
 pub struct Session {
@@ -97,7 +98,7 @@ impl Session {
     pub fn pty(&self) -> Option<(&str, PtySize)> {
         match &self.kind {
             SessionKind::Pty { term, size } => Some((term, *size)),
-            SessionKind::Exec { .. } => None,
+            _ => None,
         }
     }
 
@@ -105,7 +106,7 @@ impl Session {
     pub fn command(&self) -> Option<&str> {
         match &self.kind {
             SessionKind::Exec { command } => Some(command),
-            SessionKind::Pty { .. } => None,
+            _ => None,
         }
     }
 
@@ -163,6 +164,11 @@ impl Session {
     /// Returns `Err` if closing fails
     pub async fn close(&self) -> crate::Result<()> {
         self.channel.close().await.map_err(crate::Error::Ssh)
+    }
+
+    #[must_use]
+    pub const fn is_interactive(&self) -> bool {
+        matches!(self.kind, SessionKind::Pty { .. } | SessionKind::Shell)
     }
 
     #[must_use]
