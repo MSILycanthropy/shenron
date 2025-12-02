@@ -2,30 +2,7 @@ use std::{collections::HashMap, net::SocketAddr};
 
 use russh::{Channel, ChannelMsg, server::Msg};
 
-pub use russh::Sig as Signal;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PtySize {
-    pub width: u32,
-    pub height: u32,
-    pub pixel_width: u32,
-    pub pixel_height: u32,
-}
-
-#[derive(Debug)]
-pub enum Event {
-    Input(Vec<u8>),
-    Resize(PtySize),
-    Signal(Signal),
-    Eof,
-}
-
-#[derive(Clone)]
-pub enum SessionKind {
-    Pty { term: String, size: PtySize },
-    Exec { command: String },
-    Shell,
-}
+use crate::{Event, PtySize, SessionKind};
 
 pub struct Session {
     channel: Channel<Msg>,
