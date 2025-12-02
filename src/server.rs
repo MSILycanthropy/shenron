@@ -171,6 +171,7 @@ impl russh::server::Server for ShenronServer {
             channel: None,
             user: None,
             auth: Arc::clone(&self.auth),
+            env: HashMap::new(),
         }
     }
 }
@@ -181,6 +182,7 @@ struct ShenronHandler {
     channel: Option<Channel<Msg>>,
     user: Option<String>,
     auth: Arc<AuthConfig>,
+    env: HashMap<String, String>,
 }
 
 impl russh::server::Handler for ShenronHandler {
@@ -254,6 +256,19 @@ impl russh::server::Handler for ShenronHandler {
         rejection
     }
 
+    async fn env_request(
+        &mut self,
+        _channel: russh::ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        _session: &mut RusshSession,
+    ) -> crate::Result<()> {
+        self.env
+            .insert(variable_name.to_string(), variable_value.to_string());
+
+        Ok(())
+    }
+
     async fn pty_request(
         &mut self,
         channel_id: russh::ChannelId,
@@ -284,7 +299,7 @@ impl russh::server::Handler for ShenronHandler {
             pty_size,
             user,
             term.to_string(),
-            HashMap::new(),
+            std::mem::take(&mut self.env),
             self.remote_addr,
         );
 
