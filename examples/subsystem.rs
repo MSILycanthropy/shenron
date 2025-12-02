@@ -22,7 +22,7 @@ async fn main() -> shenron::Result<()> {
     Ok(())
 }
 
-async fn app(mut session: Session) -> shenron::Result<()> {
+async fn app(mut session: Session) -> shenron::Result<Session> {
     match session.kind() {
         SessionKind::Subsystem { name } => match name.as_str() {
             "echo" => {
@@ -30,13 +30,13 @@ async fn app(mut session: Session) -> shenron::Result<()> {
                     let s = String::from_utf8_lossy(&data);
                     session.write_str(&format!("Got: {s}\r\n")).await?;
                 }
-                session.exit(0).await
+                session.exit(0)
             }
             other => {
                 session
                     .write_stderr_str(&format!("Unknown subsystem: {other}\n"))
                     .await?;
-                session.exit(1).await
+                session.exit(1)
             }
         },
         SessionKind::Pty { .. } | SessionKind::Shell => {
@@ -44,13 +44,13 @@ async fn app(mut session: Session) -> shenron::Result<()> {
                 .write_str("This server only supports subsystems.\r\n")
                 .await?;
             session.write_str("Try: ssh -s echo\r\n").await?;
-            session.exit(0).await
+            session.exit(0)
         }
         SessionKind::Exec { command } => {
             session
                 .write_stderr_str(&format!("Exec not supported: {command}\n"))
                 .await?;
-            session.exit(1).await
+            session.exit(1)
         }
     }
 }

@@ -27,15 +27,15 @@ use crate::{Next, Result, Session};
 /// }
 /// ```
 pub trait Middleware: Send + Sync + Clone + 'static {
-    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<()>> + Send;
+    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<Session>> + Send;
 }
 
 impl<F, Fut> Middleware for F
 where
     F: Fn(Session, Next) -> Fut + Send + Sync + Clone + 'static,
-    Fut: Future<Output = Result<()>> + Send,
+    Fut: Future<Output = Result<Session>> + Send,
 {
-    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<()>> + Send {
+    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<Session>> + Send {
         (self)(session, next)
     }
 }

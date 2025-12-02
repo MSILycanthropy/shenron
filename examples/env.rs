@@ -14,7 +14,7 @@ async fn main() -> shenron::Result<()> {
         .await
 }
 
-async fn app(session: Session) -> shenron::Result<()> {
+async fn app(session: Session) -> shenron::Result<Session> {
     session.write_str("Environment variables:\r\n").await?;
     session.write_str("----------------------\r\n").await?;
 
@@ -45,5 +45,5 @@ async fn app(session: Session) -> shenron::Result<()> {
         .write_str(&format!("  REMOTE={}\r\n", session.remote_addr()))
         .await?;
 
-    session.exit(0).await
+    session.exit(0)
 }

@@ -17,7 +17,7 @@ impl Next {
     /// # Errors
     ///
     /// Returns `Err` if the next middleware fails
-    pub async fn run(self, session: Session) -> Result<()> {
+    pub async fn run(self, session: Session) -> Result<Session> {
         self.inner.call(session).await
     }
 }

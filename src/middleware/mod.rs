@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod chain;
 pub mod core;
 pub mod erased;

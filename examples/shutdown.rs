@@ -27,7 +27,7 @@ async fn main() -> shenron::Result<()> {
     Ok(())
 }
 
-async fn app(mut session: Session) -> shenron::Result<()> {
+async fn app(mut session: Session) -> shenron::Result<Session> {
     match session.kind() {
         SessionKind::Pty { .. } | SessionKind::Shell => {
             session
@@ -52,5 +52,5 @@ async fn app(mut session: Session) -> shenron::Result<()> {
         SessionKind::Subsystem { .. } => {}
     }
 
-    session.exit(0).await
+    session.exit(0)
 }

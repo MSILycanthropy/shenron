@@ -27,7 +27,7 @@ struct MiddlewareHandler {
 }
 
 impl ErasedHandler for MiddlewareHandler {
-    fn call(&self, session: Session) -> BoxFuture<Result<()>> {
+    fn call(&self, session: Session) -> BoxFuture<Result<Session>> {
         let next = Next::new(Arc::clone(&self.next));
 
         self.middleware.handle(session, next)

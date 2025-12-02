@@ -6,7 +6,7 @@ use russh::{
     server::{Auth, Msg, Session as RusshSession},
 };
 
-use crate::{PtySize, SessionKind, auth::AuthConfig, middleware::ErasedHandler};
+use crate::{PtySize, Session, SessionKind, auth::AuthConfig, middleware::ErasedHandler};
 
 pub(crate) struct ShenronServer {
     pub(crate) handler: Arc<dyn ErasedHandler>,
@@ -160,11 +160,7 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        tokio::spawn(async move {
-            if let Err(e) = handler.call(app_session).await {
-                tracing::error!("Handler error: {}", e);
-            }
-        });
+        run_handler(handler, app_session);
 
         session.channel_success(channel_id)?;
 
@@ -224,11 +220,7 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        tokio::spawn(async move {
-            if let Err(e) = handler.call(app_session).await {
-                tracing::error!("Handler error: {}", e);
-            }
-        });
+        run_handler(handler, app_session);
 
         session.channel_success(channel_id)?;
 
@@ -260,14 +252,23 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        tokio::spawn(async move {
-            if let Err(e) = handler.call(app_session).await {
-                tracing::error!("Handler error: {}", e);
-            }
-        });
+        run_handler(handler, app_session);
 
         session.channel_success(channel_id)?;
 
         Ok(())
     }
+}
+
+fn run_handler(handler: Arc<dyn ErasedHandler>, session: Session) {
+    tokio::spawn(async move {
+        match handler.call(session).await {
+            Ok(session) => {
+                let _ = session.abort().await;
+            }
+            Err(e) => {
+                tracing::error!("Handler error: {}", e);
+            }
+        }
+    });
 }

@@ -1,6 +1,6 @@
 use shenron::{Event, Result, Server, Session, Signal};
 
-async fn signal(mut session: Session) -> shenron::Result<()> {
+async fn signal(mut session: Session) -> shenron::Result<Session> {
     session
         .write_str("Running... (send SIGINT to stop)\r\n")
         .await?;
@@ -34,7 +34,7 @@ async fn signal(mut session: Session) -> shenron::Result<()> {
         }
     }
 
-    session.exit(0).await
+    session.exit(0)
 }
 
 #[tokio::main]

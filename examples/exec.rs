@@ -15,7 +15,7 @@ async fn main() -> shenron::Result<()> {
         .await
 }
 
-async fn app(session: Session) -> shenron::Result<()> {
+async fn app(session: Session) -> shenron::Result<Session> {
     if let SessionKind::Exec { command } = session.kind() {
         let output = match command.trim() {
             "whoami" => format!("{}\n", session.user()),
@@ -37,12 +37,12 @@ async fn app(session: Session) -> shenron::Result<()> {
                 session
                     .write_stderr_str(&format!("Unknown command: {other}\n"))
                     .await?;
-                return session.exit(127).await;
+                return session.exit(127);
             }
         };
 
         session.write_str(&output).await?;
     }
 
-    session.exit(0).await
+    session.exit(0)
 }

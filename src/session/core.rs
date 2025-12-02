@@ -10,6 +10,7 @@ pub struct Session {
     user: String,
     env: HashMap<String, String>,
     remote_addr: SocketAddr,
+    exit_code: Option<u32>,
 }
 
 impl Session {
@@ -26,6 +27,7 @@ impl Session {
             user,
             env,
             remote_addr,
+            exit_code: None,
         }
     }
 
@@ -167,14 +169,16 @@ impl Session {
         self.write_stderr(s.as_bytes()).await
     }
 
-    /// Exit the session with a status code (0 = success)
-    ///
-    /// # Errors
-    /// Returns `Err` if closing fails
-    pub async fn exit(&self, code: u32) -> crate::Result<()> {
-        self.channel.exit_status(code).await?;
-        self.channel.eof().await?;
-        self.channel.close().await.map_err(crate::Error::Ssh)
+    #[allow(clippy::missing_errors_doc)]
+    pub const fn exit(mut self, code: u32) -> crate::Result<Self> {
+        self.exit_code = Some(code);
+
+        Ok(self)
+    }
+
+    #[must_use]
+    pub const fn will_exit(&self) -> bool {
+        self.exit_code.is_some()
     }
 
     #[must_use]
@@ -185,5 +189,15 @@ impl Session {
     #[must_use]
     pub const fn channel(&self) -> &Channel<Msg> {
         &self.channel
+    }
+
+    pub(crate) async fn abort(&self) -> crate::Result<()> {
+        let Some(exit_code) = self.exit_code else {
+            return Ok(());
+        };
+
+        self.channel.exit_status(exit_code).await?;
+        self.channel.eof().await?;
+        self.channel.close().await.map_err(crate::Error::Ssh)
     }
 }

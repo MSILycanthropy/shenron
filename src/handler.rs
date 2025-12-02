@@ -16,7 +16,7 @@ use crate::{Result, Session};
 /// }
 /// ```
 pub trait Handler: Send + Sync + Clone + 'static {
-    type Future: Future<Output = Result<()>> + Send;
+    type Future: Future<Output = Result<Session>> + Send;
 
     fn call(&self, session: Session) -> Self::Future;
 }
@@ -24,7 +24,7 @@ pub trait Handler: Send + Sync + Clone + 'static {
 impl<F, Fut> Handler for F
 where
     F: Fn(Session) -> Fut + Send + Sync + Clone + 'static,
-    Fut: Future<Output = Result<()>> + Send,
+    Fut: Future<Output = Result<Session>> + Send,
 {
     type Future = Fut;
 

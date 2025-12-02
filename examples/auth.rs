@@ -1,6 +1,6 @@
 use shenron::{Event, Result, Server, Session};
 
-async fn whoami(mut session: Session) -> Result<()> {
+async fn whoami(mut session: Session) -> Result<Session> {
     session
         .write_str(&format!(
             "Welcome {}! You're connected from {}\r\n",
@@ -19,9 +19,8 @@ async fn whoami(mut session: Session) -> Result<()> {
     }
 
     session.write_str("Goodbye!\r\n").await?;
-    session.exit(0).await?;
 
-    Ok(())
+    session.exit(0)
 }
 
 #[tokio::main]
