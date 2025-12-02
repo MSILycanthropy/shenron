@@ -1,44 +1,49 @@
-use async_trait::async_trait;
-use shenron::{App, Result, Session};
+use shenron::{Event, Next, Result, Server, Session};
 
-#[derive(Default)]
-struct EchoServer;
+async fn echo(mut session: Session) -> Result<()> {
+    session.write_str("Welcome to Shenron!\r\n").await?;
+    session
+        .write_str(&format!("Hello, {}!\r\n", session.user()))
+        .await?;
+    session
+        .write_str("Type anything and it will be echoed back.\r\n")
+        .await?;
+    session
+        .write_str("Press Ctrl+C or Ctrl+D to exit.\r\n\r\n")
+        .await?;
 
-#[async_trait]
-impl App for EchoServer {
-    async fn handle(&self, mut session: Session) -> Result<()> {
-        session.write_str("Welcome to Shrenron!\r\n").await?;
-        session
-            .write_str(&format!("Hello, {}!\r\n", session.user))
-            .await?;
-        session
-            .write_str("Type anything and it will be echoed back.\r\n")
-            .await?;
-        session
-            .write_str("Press Ctrl+C or Ctrl+D to exit.\r\n\r\n")
-            .await?;
+    while let Some(event) = session.next().await {
+        match event {
+            Event::Input(data) => {
+                if data.contains(&3) || data.contains(&4) {
+                    session.write_str("\r\nGoodbye!\r\n").await?;
+                    break;
+                }
 
-        while let Some(data) = session.read().await {
-            if data.contains(&3) || data.contains(&4) {
-                session.write_str("\r\nGoodbye!\r\n").await?;
-                session.end().await?;
-                break;
+                let s = String::from_utf8_lossy(&data);
+                session.write_str(&format!("Got: {s}\r\n")).await?;
             }
-
-            let string = String::from_utf8(data.clone()).unwrap_or_else(|_| "?".into());
-
-            session
-                .write_str(&format!("\r\nGot Data: {string}\r\n"))
-                .await?;
-
-            if session.has_resized() {
-                let size = session.pty_size();
-                tracing::debug!("Window resized to {}x{}", size.width, size.height);
+            Event::Resize(size) => {
+                tracing::debug!("Resized to {}x{}", size.width, size.height);
             }
+            Event::Eof => break,
         }
-
-        Ok(())
     }
+
+    session.close().await?;
+
+    Ok(())
+}
+
+async fn log(session: Session, next: Next) -> Result<()> {
+    tracing::info!(
+        "{} connected from {}",
+        session.user(),
+        session.remote_addr()
+    );
+    let result = next.run(session).await;
+    tracing::info!("session ended");
+    result
 }
 
 #[tokio::main]
@@ -47,19 +52,18 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let host_key =
+    let key =
         russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
             .expect("Failed to create key");
 
     tracing::info!("Starting echo server on 0.0.0.0:2222");
     tracing::info!("Connect with: ssh -p 2222 localhost");
 
-    shenron::Server::default()
+    Server::new()
         .bind("0.0.0.0:2222")
-        .host_key(host_key)
-        .app(EchoServer)
+        .host_key(key)
+        .with(log)
+        .app(echo)
         .serve()
-        .await?;
-
-    Ok(())
+        .await
 }

@@ -13,8 +13,6 @@ nursery = "warn"
 unwrap_used = "warn"
 
 [dependencies]
-async-trait = "0.1.89"
-bon = "3.8.1"
 russh = { version = "0.54.6", features = ["aws-lc-rs"] }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["full"] }

@@ -1,28 +1,30 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use russh::{
-    Channel, ChannelId,
-    keys::PrivateKey,
-    server::{self, Auth, Config, Msg, Server as _, Session as RusshSession},
+    Channel,
+    keys::{PrivateKey, PublicKey},
+    server::{Config, Msg, Server as _, Session as RusshSession},
 };
-use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::{
-    App, Result,
-    session::{PtySize, ResizeTx},
+    Handler,
+    middleware::{self, ErasedHandler, ErasedMiddleware, Middleware},
+    session::PtySize,
 };
 
 #[derive(Default)]
-pub struct Server<A> {
+pub struct Server {
     addr: Option<String>,
     keys: Vec<PrivateKey>,
-    app: Option<Arc<A>>,
+    middleware: Vec<Arc<dyn ErasedMiddleware>>,
 }
 
-impl<A> Server<A>
-where
-    A: App,
-{
+impl Server {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     #[must_use]
     pub fn bind(mut self, addr: impl Into<String>) -> Self {
         self.addr = Some(addr.into());
@@ -35,37 +37,62 @@ where
         self
     }
 
+    /// Add a host key from file
+    ///
     /// # Errors
     ///
-    /// Will return `Err` if russh failes to load the secret key
-    pub fn host_key_file(self, path: impl AsRef<std::path::Path>) -> Result<Self> {
+    /// Returns `Err` if the key file cannot be loaded
+    pub fn host_key_file(self, path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
         let key = russh::keys::load_secret_key(path, None)?;
 
         Ok(self.host_key(key))
     }
 
+    /// Add a middlware to the middlware stack
+    ///
+    /// Middlware are executed outside-in: the first middleware
+    /// is the outermost (ie it sees the session first and the result last)
     #[must_use]
-    pub fn app(mut self, app: A) -> Self {
-        self.app = Some(Arc::new(app));
+    pub fn with<M: Middleware + Clone>(mut self, middleware: M) -> Self {
+        self.middleware.push(Arc::new(middleware));
 
         self
     }
 
+    /// Set the handler and prepare to run the server
+    pub fn app<H: Handler>(self, handler: H) -> RunnableServer {
+        let chain = middleware::build_chain(handler, self.middleware);
+
+        RunnableServer {
+            addr: self.addr,
+            keys: self.keys,
+            handler: chain,
+        }
+    }
+}
+
+pub struct RunnableServer {
+    addr: Option<String>,
+    keys: Vec<PrivateKey>,
+    handler: Arc<dyn ErasedHandler>,
+}
+
+impl RunnableServer {
+    /// Start the server and listen for connections
+    ///
     /// # Errors
     ///
-    /// Will return `Err` if `self.addr` is not set
-    /// Will return `Err` if `self.app` is not set
-    pub async fn serve(self) -> Result<()> {
+    /// Returns `Err` if
+    /// - No bind address was specified
+    /// - No host keys were supplied
+    /// - The server failed to start
+    pub async fn serve(self) -> crate::Result<()> {
         let addr = self
             .addr
-            .ok_or_else(|| crate::Error::Custom("No bind address specified".into()))?;
-
-        let app = self
-            .app
-            .ok_or_else(|| crate::Error::Custom("No app specified".into()))?;
+            .ok_or_else(|| crate::Error::Config("No bind address specified".into()))?;
 
         if self.keys.is_empty() {
-            return Err(crate::Error::Custom("No host keys specified".into()));
+            return Err(crate::Error::Config("No host keys specified".into()));
         }
 
         let config = Config {
@@ -74,7 +101,10 @@ where
         };
 
         let config = Arc::new(config);
-        let mut sh = ShenronServer { app };
+
+        let mut sh = ShenronServer {
+            handler: self.handler,
+        };
 
         sh.run_on_address(config, addr).await?;
 
@@ -82,47 +112,39 @@ where
     }
 }
 
-struct ShenronServer<A> {
-    app: Arc<A>,
+struct ShenronServer {
+    handler: Arc<dyn ErasedHandler>,
 }
 
-impl<A> server::Server for ShenronServer<A>
-where
-    A: App,
-{
-    type Handler = ShenronHandler<A>;
+impl russh::server::Server for ShenronServer {
+    type Handler = ShenronHandler;
 
-    fn new_client(&mut self, _addr: Option<SocketAddr>) -> Self::Handler {
+    fn new_client(&mut self, addr: Option<SocketAddr>) -> Self::Handler {
         ShenronHandler {
-            app: Arc::clone(&self.app),
-            channels: Arc::new(Mutex::new(HashMap::new())),
-            inputs: Arc::new(Mutex::new(HashMap::new())),
-            resizes: Arc::new(Mutex::new(HashMap::new())),
+            handler: Arc::clone(&self.handler),
+            remote_addr: addr.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
+            channel: None,
+            user: None,
         }
     }
 }
 
-struct ShenronHandler<A> {
-    app: Arc<A>,
-    channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
-    inputs: Arc<Mutex<HashMap<ChannelId, mpsc::Sender<Vec<u8>>>>>,
-    resizes: Arc<Mutex<HashMap<ChannelId, ResizeTx>>>,
+struct ShenronHandler {
+    handler: Arc<dyn ErasedHandler>,
+    remote_addr: SocketAddr,
+    channel: Option<Channel<Msg>>,
+    user: Option<String>,
 }
 
-impl<A> server::Handler for ShenronHandler<A>
-where
-    A: App,
-{
+impl russh::server::Handler for ShenronHandler {
     type Error = crate::Error;
 
     async fn channel_open_session(
         &mut self,
-        channel: Channel<russh::server::Msg>,
+        channel: Channel<Msg>,
         _session: &mut RusshSession,
-    ) -> Result<bool> {
-        tracing::info!("Channel opened: {:?}", channel.id());
-
-        self.channels.lock().await.insert(channel.id(), channel);
+    ) -> crate::Result<bool> {
+        self.channel = Some(channel);
 
         Ok(true)
     }
@@ -130,26 +152,30 @@ where
     async fn auth_publickey(
         &mut self,
         user: &str,
-        _public_key: &russh::keys::ssh_key::PublicKey,
-    ) -> Result<Auth> {
-        tracing::info!("Pubkey auth attempt for user: {}", user);
+        _public_key: &PublicKey,
+    ) -> crate::Result<russh::server::Auth> {
+        // TODO: configing auth
 
-        // TODO: impl publickey auth
+        self.user = Some(user.to_string());
 
-        Ok(Auth::Accept)
+        Ok(russh::server::Auth::Accept)
     }
 
-    async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth> {
-        tracing::info!("Password auth attempt for user: {}", user);
+    async fn auth_password(
+        &mut self,
+        user: &str,
+        _password: &str,
+    ) -> crate::Result<russh::server::Auth> {
+        // TODO: configing auth
 
-        // TODO: impl password auth
+        self.user = Some(user.to_string());
 
-        Ok(Auth::Accept)
+        Ok(russh::server::Auth::Accept)
     }
 
     async fn pty_request(
         &mut self,
-        channel: ChannelId,
+        channel_id: russh::ChannelId,
         term: &str,
         col_width: u32,
         row_height: u32,
@@ -157,106 +183,40 @@ where
         pix_height: u32,
         _modes: &[(russh::Pty, u32)],
         session: &mut RusshSession,
-    ) -> Result<()> {
-        tracing::info!(
-            "PTY request on channel {:?}: {}x{} ({})",
-            channel,
-            col_width,
-            row_height,
-            term
-        );
+    ) -> crate::Result<()> {
+        let channel = self
+            .channel
+            .take()
+            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
 
-        let initial_size = PtySize {
+        let pty_size = PtySize {
             width: col_width,
             height: row_height,
             pixel_width: pix_width,
             pixel_height: pix_height,
         };
 
-        let channel = self
-            .channels
-            .lock()
-            .await
-            .remove(&channel)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel))?;
-        let channel_id = channel.id();
+        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
 
-        let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(32);
-        let (resize_tx, resize_rx) = watch::channel::<PtySize>(initial_size);
+        let app_session = crate::Session::new(
+            channel,
+            pty_size,
+            user,
+            term.to_string(),
+            HashMap::new(),
+            self.remote_addr,
+        );
 
-        let app_session = crate::session::Session::new(channel, input_rx, resize_rx);
-
-        self.inputs.lock().await.insert(channel_id, input_tx);
-        self.resizes.lock().await.insert(channel_id, resize_tx);
-
-        let app = Arc::clone(&self.app);
+        let handler = Arc::clone(&self.handler);
 
         tokio::spawn(async move {
-            if let Err(e) = app.handle(app_session).await {
-                tracing::error!("Application Error on Channel {:?}: {}", channel_id, e);
+            if let Err(e) = handler.call(app_session).await {
+                tracing::error!("Handler error: {}", e);
             }
-
-            tracing::info!("Finished handling on channel {:?}", channel_id);
         });
 
         session.channel_success(channel_id)?;
 
-        Ok(())
-    }
-
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        _session: &mut RusshSession,
-    ) -> Result<()> {
-        tracing::debug!("Data on channel: {:?}: {} bytes", channel, data.len());
-
-        if let Some(input_tx) = self.inputs.lock().await.get(&channel)
-            && let Err(e) = input_tx.send(data.to_vec()).await
-        {
-            tracing::error!(
-                "Failed to send input to app on channel {:?}: {}",
-                channel,
-                e
-            );
-        }
-
-        Ok(())
-    }
-
-    async fn window_change_request(
-        &mut self,
-        channel: ChannelId,
-        col_width: u32,
-        row_height: u32,
-        pix_width: u32,
-        pix_height: u32,
-        _session: &mut RusshSession,
-    ) -> Result<()> {
-        tracing::debug!(
-            "Window change on channel {:?}: {}x{}",
-            channel,
-            col_width,
-            row_height
-        );
-
-        let size = PtySize {
-            width: col_width,
-            height: row_height,
-            pixel_width: pix_width,
-            pixel_height: pix_height,
-        };
-
-        if let Some(resize_tx) = self.resizes.lock().await.get(&channel)
-            && let Err(e) = resize_tx.send(size)
-        {
-            tracing::error!(
-                "Failed to send resize to app on channel {:?}: {}",
-                channel,
-                e
-            );
-        }
         Ok(())
     }
 }

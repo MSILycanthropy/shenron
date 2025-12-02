@@ -1,7 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr};
 
-use russh::{Channel, server::Msg};
-use tokio::sync::{mpsc, watch};
+use russh::{Channel, ChannelMsg, server::Msg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PtySize {
@@ -11,92 +10,131 @@ pub struct PtySize {
     pub pixel_height: u32,
 }
 
-impl Default for PtySize {
-    fn default() -> Self {
-        Self {
-            width: 80,
-            height: 24,
-            pixel_width: 0,
-            pixel_height: 0,
-        }
-    }
+#[derive(Debug)]
+pub enum Event {
+    Input(Vec<u8>),
+    Resize(PtySize),
+    Eof,
 }
 
-pub(crate) type Input = mpsc::Receiver<Vec<u8>>;
-pub(crate) type ResizeTx = watch::Sender<PtySize>;
-pub(crate) type ResizeRx = watch::Receiver<PtySize>;
-
 pub struct Session {
-    pub user: String,
-
-    pub env: HashMap<String, String>,
-
-    pub term: String,
-
-    pub(crate) channel: Channel<Msg>,
-
-    pub(crate) input: Input,
-
-    pub(crate) resize_rx: ResizeRx,
+    channel: Channel<Msg>,
+    pty_size: PtySize,
+    user: String,
+    term: String,
+    env: HashMap<String, String>,
+    remote_addr: SocketAddr,
 }
 
 impl Session {
-    pub(crate) fn new(channel: Channel<Msg>, input: Input, resize_rx: ResizeRx) -> Self {
+    pub(crate) const fn new(
+        channel: Channel<Msg>,
+        pty_size: PtySize,
+        user: String,
+        term: String,
+        env: HashMap<String, String>,
+        remote_addr: SocketAddr,
+    ) -> Self {
         Self {
             channel,
-            user: "TODO: Figure this out".into(),
-            env: HashMap::new(),
-            term: String::from("xterm"),
-            input,
-            resize_rx,
+            pty_size,
+            user,
+            term,
+            env,
+            remote_addr,
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<Event> {
+        loop {
+            let event = self.channel.wait().await?;
+
+            match event {
+                ChannelMsg::Data { data } => return Some(Event::Input(data.to_vec())),
+                ChannelMsg::WindowChange {
+                    col_width,
+                    row_height,
+                    pix_width,
+                    pix_height,
+                } => {
+                    self.pty_size = PtySize {
+                        width: col_width,
+                        height: row_height,
+                        pixel_width: pix_width,
+                        pixel_height: pix_height,
+                    };
+
+                    return Some(Event::Resize(self.pty_size));
+                }
+                ChannelMsg::Eof => return Some(Event::Eof),
+
+                // Skip protocol messages
+                _ => {}
+            }
+        }
+    }
+
+    pub async fn input(&mut self) -> Option<Vec<u8>> {
+        match self.next().await? {
+            Event::Input(data) => Some(data),
+            _ => None,
         }
     }
 
     #[must_use]
-    pub fn pty_size(&self) -> PtySize {
-        *self.resize_rx.borrow()
+    pub const fn pty_size(&self) -> PtySize {
+        self.pty_size
     }
 
-    pub async fn read(&mut self) -> Option<Vec<u8>> {
-        self.input.recv().await
+    #[must_use]
+    pub fn term(&self) -> &str {
+        &self.term
     }
 
+    #[must_use]
+    pub fn user(&self) -> &str {
+        &self.user
+    }
+
+    #[must_use]
+    pub const fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+
+    #[must_use]
+    pub const fn env(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
+    /// Write data to the channel
+    ///
     /// # Errors
     ///
-    /// Will return `Err` if data failed to send
+    /// Returns `Err` if the message fails to send
     pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
-        tracing::debug!("Attemping to write {:?} to ouput", &data);
-
-        self.channel
-            .data(data)
-            .await
-            .map_err(|_| crate::Error::Custom("Failed to send data".into()))
+        self.channel.data(data).await.map_err(crate::Error::Ssh)
     }
 
+    /// Write a string to the channel
+    ///
     /// # Errors
     ///
-    /// Will return `Err` if data failed to send
+    /// Returns `Err` if the message fails to send
     pub async fn write_str(&self, s: &str) -> crate::Result<()> {
         self.write(s.as_bytes()).await
     }
 
-    pub async fn wait_for_resize(&mut self) -> Option<PtySize> {
-        self.resize_rx.changed().await.ok()?;
-
-        Some(self.pty_size())
-    }
-
-    pub fn has_resized(&mut self) -> bool {
-        self.resize_rx.has_changed().unwrap_or(false)
-    }
-
+    /// Close the session
+    ///
     /// # Errors
     ///
-    /// Will return `Err` if russh fails to close the session
-    pub async fn end(&self) -> crate::Result<()> {
-        self.channel
-            .close()
-            .await
-            .map_err(|_| crate::Error::Custom("Failed to end session".into()))
+    /// Returns `Err` if closing fails
+    pub async fn close(&self) -> crate::Result<()> {
+        self.channel.close().await.map_err(crate::Error::Ssh)
+    }
+
+    #[must_use]
+    pub const fn channel(&self) -> &Channel<Msg> {
+        &self.channel
     }
 }
