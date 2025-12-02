@@ -11,6 +11,7 @@ use crate::{PtySize, SessionKind, auth::AuthConfig, middleware::ErasedHandler};
 pub(crate) struct ShenronServer {
     pub(crate) handler: Arc<dyn ErasedHandler>,
     pub(crate) auth: Arc<AuthConfig>,
+    pub(crate) banner: Option<String>,
 }
 
 impl russh::server::Server for ShenronServer {
@@ -25,6 +26,7 @@ impl russh::server::Server for ShenronServer {
             auth: Arc::clone(&self.auth),
             env: HashMap::new(),
             pty: None,
+            banner: self.banner.clone(),
         }
     }
 }
@@ -37,10 +39,15 @@ pub(crate) struct ShenronHandler {
     auth: Arc<AuthConfig>,
     env: HashMap<String, String>,
     pty: Option<(String, PtySize)>,
+    banner: Option<String>,
 }
 
 impl russh::server::Handler for ShenronHandler {
     type Error = crate::Error;
+
+    async fn authentication_banner(&mut self) -> crate::Result<Option<String>> {
+        Ok(self.banner.clone())
+    }
 
     async fn channel_open_session(
         &mut self,

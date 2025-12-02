@@ -24,6 +24,7 @@ pub struct Server {
     shutdown: Option<ShutdownFuture>,
     auth_timeout: Option<Duration>,
     inactivity_timeout: Option<Duration>,
+    banner: Option<String>,
 }
 
 impl Server {
@@ -53,6 +54,23 @@ impl Server {
         let key = russh::keys::load_secret_key(path, None)?;
 
         Ok(self.host_key(key))
+    }
+
+    #[must_use]
+    pub fn banner(mut self, banner: impl Into<String>) -> Self {
+        self.banner = Some(banner.into());
+        self
+    }
+
+    /// Add a banner from a file
+    ///
+    /// # Errors
+    ///
+    /// Reeturns `Err` if the banner file cannot be loaded
+    pub fn banner_file(self, path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
+        let banner = std::fs::read_to_string(path)?;
+
+        Ok(self.banner(banner))
     }
 
     /// Add a middlware to the middlware stack
@@ -187,7 +205,11 @@ impl Server {
             .ok_or_else(|| crate::Error::Config("No app handler specified".into()))?;
 
         let auth = Arc::new(self.auth);
-        let mut sh = ShenronServer { handler, auth };
+        let mut sh = ShenronServer {
+            handler,
+            auth,
+            banner: self.banner,
+        };
 
         match self.shutdown {
             Some(shutdown) => {
