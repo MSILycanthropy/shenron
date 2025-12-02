@@ -5,7 +5,7 @@ use russh::{
     keys::PrivateKey,
     server::{self, Auth, Config, Msg, Server as _, Session as RusshSession},
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::{
     App, Result,
@@ -166,27 +166,30 @@ where
             term
         );
 
+        let initial_size = PtySize {
+            width: col_width,
+            height: row_height,
+            pixel_width: pix_width,
+            pixel_height: pix_height,
+        };
+
+        let channel = self
+            .channels
+            .lock()
+            .await
+            .remove(&channel)
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel))?;
+        let channel_id = channel.id();
+
         let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>(32);
-        let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(32);
-        let (resize_tx, resize_rx) = mpsc::channel::<PtySize>(8);
+        let (resize_tx, resize_rx) = watch::channel::<PtySize>(initial_size);
 
-        let app_session =
-            crate::session::Session::new(session.handle(), channel, input_rx, output_tx, resize_rx);
+        let app_session = crate::session::Session::new(channel, input_rx, resize_rx);
 
-        app_session
-            .set_pty_size(PtySize {
-                width: col_width,
-                height: row_height,
-                pixel_width: pix_width,
-                pixel_height: pix_height,
-            })
-            .await;
-
-        self.inputs.lock().await.insert(channel, input_tx);
-        self.resizes.lock().await.insert(channel, resize_tx);
+        self.inputs.lock().await.insert(channel_id, input_tx);
+        self.resizes.lock().await.insert(channel_id, resize_tx);
 
         let app = Arc::clone(&self.app);
-        let channel_id = channel;
 
         tokio::spawn(async move {
             if let Err(e) = app.handle(app_session).await {
@@ -196,25 +199,7 @@ where
             tracing::info!("Finished handling on channel {:?}", channel_id);
         });
 
-        let channels = Arc::clone(&self.channels);
-
-        tokio::spawn(async move {
-            while let Some(data) = output_rx.recv().await {
-                let channels = channels.lock().await;
-
-                if let Some(channel) = channels.get(&channel_id) {
-                    if let Err(e) = channel.data(data.as_slice()).await {
-                        tracing::error!("Failed to send data to channel {:?}: {}", channel_id, e);
-
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-        });
-
-        session.channel_success(channel)?;
+        session.channel_success(channel_id)?;
 
         Ok(())
     }
@@ -264,7 +249,7 @@ where
         };
 
         if let Some(resize_tx) = self.resizes.lock().await.get(&channel)
-            && let Err(e) = resize_tx.send(size).await
+            && let Err(e) = resize_tx.send(size)
         {
             tracing::error!(
                 "Failed to send resize to app on channel {:?}: {}",

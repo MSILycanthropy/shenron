@@ -25,9 +25,14 @@ impl App for EchoServer {
                 break;
             }
 
-            session.write(&data).await?;
+            let string = String::from_utf8(data.clone()).unwrap_or_else(|_| "?".into());
 
-            if let Some(size) = session.try_recv_resize() {
+            session
+                .write_str(&format!("\r\nGot Data: {string}\r\n"))
+                .await?;
+
+            if session.has_resized() {
+                let size = session.pty_size();
                 tracing::debug!("Window resized to {}x{}", size.width, size.height);
             }
         }

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use russh::ChannelId;
 
 pub use crate::server::Server;
 pub use crate::session::Session;
@@ -24,6 +25,9 @@ pub enum Error {
 
     #[error("Session not found")]
     SessionNotFound,
+
+    #[error("Channel not found: {0}")]
+    ChannelNotFound(ChannelId),
 
     #[error("{0}")]
     Custom(String),
