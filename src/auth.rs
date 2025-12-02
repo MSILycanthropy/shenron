@@ -1,6 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
-use russh::keys::PublicKey;
+use russh::{MethodKind, MethodSet, keys::PublicKey};
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -38,7 +38,7 @@ where
 }
 
 /// Configured authentication for a server
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct AuthConfig {
     pub password: Option<Arc<dyn PasswordAuth>>,
     pub pubkey: Option<Arc<dyn PubkeyAuth>>,
@@ -47,5 +47,19 @@ pub(crate) struct AuthConfig {
 impl AuthConfig {
     pub fn is_empty(&self) -> bool {
         self.password.is_none() && self.pubkey.is_none()
+    }
+
+    pub fn methods(&self) -> MethodSet {
+        let mut methods: Vec<MethodKind> = vec![];
+
+        if self.password.is_some() {
+            methods.push(MethodKind::Password);
+        }
+
+        if self.pubkey.is_some() {
+            methods.push(MethodKind::PublicKey);
+        }
+
+        methods.as_slice().into()
     }
 }

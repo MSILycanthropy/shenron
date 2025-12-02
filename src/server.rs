@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, pin::Pin, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use russh::{
     Channel, MethodKind,
@@ -23,6 +23,8 @@ pub struct Server {
     auth: AuthConfig,
     app: Option<Arc<dyn ErasedHandler>>,
     shutdown: Option<ShutdownFuture>,
+    auth_timeout: Option<Duration>,
+    inactivity_timeout: Option<Duration>,
 }
 
 impl Server {
@@ -112,6 +114,20 @@ impl Server {
         self
     }
 
+    #[must_use]
+    pub const fn auth_timeout(mut self, duration: Duration) -> Self {
+        self.auth_timeout = Some(duration);
+
+        self
+    }
+
+    #[must_use]
+    pub const fn inactivity_timeout(mut self, duration: Duration) -> Self {
+        self.inactivity_timeout = Some(duration);
+
+        self
+    }
+
     /// Set the application handler
     #[must_use]
     pub fn app<H: Handler>(mut self, handler: H) -> Self {
@@ -157,6 +173,8 @@ impl Server {
     /// - No host keys were supplied
     /// - The server failed to start
     pub async fn serve(self) -> crate::Result<()> {
+        let config = self.config();
+
         let addr = self
             .addr
             .ok_or_else(|| crate::Error::Config("No bind address specified".into()))?;
@@ -169,14 +187,7 @@ impl Server {
             .app
             .ok_or_else(|| crate::Error::Config("No app handler specified".into()))?;
 
-        let config = Config {
-            keys: self.keys,
-            ..Default::default()
-        };
-        let config = Arc::new(config);
-
         let auth = Arc::new(self.auth);
-
         let mut sh = ShenronServer { handler, auth };
 
         match self.shutdown {
@@ -196,6 +207,27 @@ impl Server {
         }
 
         Ok(())
+    }
+
+    fn config(&self) -> Arc<Config> {
+        let mut config = Config::default();
+
+        config.keys.clone_from(&self.keys);
+
+        if !self.auth.is_empty() {
+            config.methods = self.auth.methods();
+        }
+
+        if let Some(timeout) = self.auth_timeout {
+            config.auth_rejection_time = timeout;
+            config.auth_rejection_time_initial = Some(timeout);
+        }
+
+        if let Some(timeout) = self.inactivity_timeout {
+            config.inactivity_timeout = Some(timeout);
+        }
+
+        Arc::new(config)
     }
 }
 
