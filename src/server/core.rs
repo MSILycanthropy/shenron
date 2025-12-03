@@ -25,6 +25,8 @@ pub struct Server {
     auth_timeout: Option<Duration>,
     inactivity_timeout: Option<Duration>,
     banner: Option<String>,
+    keepalive_interval: Option<Duration>,
+    keepalive_max: Option<usize>,
 }
 
 impl Server {
@@ -84,6 +86,20 @@ impl Server {
         let banner = std::fs::read_to_string(path)?;
 
         Ok(self.banner(banner))
+    }
+
+    #[must_use]
+    pub const fn keepalive_interval(mut self, duration: Duration) -> Self {
+        self.keepalive_interval = Some(duration);
+
+        self
+    }
+
+    #[must_use]
+    pub const fn keepalive_max(mut self, retries: usize) -> Self {
+        self.keepalive_max = Some(retries);
+
+        self
     }
 
     /// Add a middlware to the middlware stack
@@ -259,6 +275,12 @@ impl Server {
 
         if let Some(timeout) = self.inactivity_timeout {
             config.inactivity_timeout = Some(timeout);
+        }
+
+        config.keepalive_interval = self.keepalive_interval;
+
+        if let Some(max) = self.keepalive_max {
+            config.keepalive_max = max;
         }
 
         Arc::new(config)
