@@ -8,7 +8,7 @@ pub enum Error {
     #[error("Key error: {0}")]
     Keys(#[from] russh::keys::Error),
 
-    #[error("IO error: {0}")]
+    #[error("RuntimeError: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("Protocol Error: {0}")]
@@ -16,4 +16,13 @@ pub enum Error {
 
     #[error("Config error: {0}")]
     Config(String),
+
+    #[error("RuntimeError: {0}")]
+    Int(#[from] std::num::TryFromIntError),
+}
+
+impl From<Error> for std::io::Error {
+    fn from(err: Error) -> Self {
+        Self::other(err.to_string())
+    }
 }

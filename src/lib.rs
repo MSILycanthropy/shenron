@@ -4,6 +4,8 @@ mod handler;
 pub mod middleware;
 pub mod server;
 mod session;
+#[cfg(feature = "ratatui")]
+pub mod tui;
 
 use std::pin::Pin;
 
