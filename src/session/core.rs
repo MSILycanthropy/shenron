@@ -33,7 +33,7 @@ impl Session {
 
     pub async fn next(&mut self) -> Option<Event> {
         loop {
-            let event = self.channel.wait().await?;
+            let event = self.channel_mut().wait().await?;
 
             match event {
                 ChannelMsg::Data { data } => return Some(Event::Input(data.to_vec())),
@@ -136,7 +136,7 @@ impl Session {
     ///
     /// Returns `Err` if the message fails to send
     pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
-        self.channel.data(data).await.map_err(crate::Error::Ssh)
+        self.channel().data(data).await.map_err(crate::Error::Ssh)
     }
 
     /// Write a string to the channel
@@ -154,7 +154,7 @@ impl Session {
     ///
     /// Returns `Err` if the message fails to send
     pub async fn write_stderr(&self, data: &[u8]) -> crate::Result<()> {
-        self.channel
+        self.channel()
             .extended_data(1, data)
             .await
             .map_err(crate::Error::Ssh)
@@ -212,13 +212,23 @@ impl Session {
         &self.channel
     }
 
+    pub const fn channel_mut(&mut self) -> &mut Channel<Msg> {
+        &mut self.channel
+    }
+
+    /// WARNING: A call to this method bricks the session, use with the UTMOST caution.
+    #[allow(unsafe_code, invalid_value)]
+    pub(crate) const fn unsafe_take_channel(&mut self) -> Channel<Msg> {
+        std::mem::replace(&mut self.channel, unsafe { std::mem::zeroed() })
+    }
+
     pub(crate) async fn do_exit(&self) -> crate::Result<()> {
         let Some(exit_code) = self.exit_code else {
             return Ok(());
         };
 
-        self.channel.exit_status(exit_code).await?;
-        self.channel.eof().await?;
-        self.channel.close().await.map_err(crate::Error::Ssh)
+        self.channel().exit_status(exit_code).await?;
+        self.channel().eof().await?;
+        self.channel().close().await.map_err(crate::Error::Ssh)
     }
 }

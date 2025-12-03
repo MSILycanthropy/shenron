@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "warn"
 
 [lints.clippy]
 enum_glob_use = "warn"
@@ -19,6 +19,7 @@ ratatui = { version = "0.29.0", optional = true, features = [
   "unstable-backend-writer",
 ] }
 russh = { version = "0.54.6", features = ["aws-lc-rs"] }
+russh-sftp = { version = "2.1.1", optional = true }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["full"] }
 tracing = "0.1.41"
@@ -32,6 +33,7 @@ tracing-subscriber = "0.3.22"
 default = []
 rate-limiting = ["dep:governor"]
 ratatui = ["dep:ratatui"]
+sftp = ["dep:russh-sftp"]
 
 [[example]]
 name = "tui"
