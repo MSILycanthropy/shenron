@@ -23,7 +23,7 @@ russh = { version = "0.55.0", features = ["aws-lc-rs"] }
 russh-sftp = { version = "2.1.1", optional = true }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["full"] }
-tracing = "0.1.41"
+tracing = "0.1.43"
 
 [dev-dependencies]
 chrono = "0.4.42"
