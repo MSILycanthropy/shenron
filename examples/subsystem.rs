@@ -6,16 +6,7 @@ use shenron::{Server, Session, SessionKind};
 async fn main() -> shenron::Result<()> {
     println!("Starting server on 127.0.0.1:2222");
 
-    let key =
-        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("Failed to create key");
-
-    Server::new()
-        .bind("0.0.0.0:2222")
-        .host_key(key)
-        .app(app)
-        .serve()
-        .await?;
+    Server::new().bind("0.0.0.0:2222").app(app).serve().await?;
 
     println!("Server stopped");
 

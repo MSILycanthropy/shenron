@@ -19,16 +19,11 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let key =
-        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("Failed to create key");
-
     tracing::info!("Starting echo server on 0.0.0.0:2222");
     tracing::info!("Connect with: ssh -p 2222 localhost");
 
     Server::new()
         .bind("0.0.0.0:2222")
-        .host_key(key)
         .with(Comment("Cya! Wouldn't wanna be ya!\r\n".into()))
         .with(elapsed)
         .app(sleep_and_die)

@@ -43,17 +43,8 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let key =
-        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("Failed to create key");
-
     tracing::info!("Starting signal example on 0.0.0.0:2222");
     tracing::info!("Connect with: ssh -p 2222 localhost");
 
-    Server::new()
-        .bind("0.0.0.0:2222")
-        .host_key(key)
-        .app(signal)
-        .serve()
-        .await
+    Server::new().bind("0.0.0.0:2222").app(signal).serve().await
 }

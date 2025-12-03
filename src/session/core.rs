@@ -217,6 +217,7 @@ impl Session {
     }
 
     /// WARNING: A call to this method bricks the session, use with the UTMOST caution.
+    #[cfg(feature = "sftp")]
     #[allow(unsafe_code, invalid_value)]
     pub(crate) const fn unsafe_take_channel(&mut self) -> Channel<Msg> {
         std::mem::replace(&mut self.channel, unsafe { std::mem::zeroed() })

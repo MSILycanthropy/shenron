@@ -95,13 +95,8 @@ async fn main() -> shenron::Result<()> {
     println!("Starting TUI server on 127.0.0.1:2222");
     println!("Connect with: ssh localhost -p 2222");
 
-    let key =
-        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("Failed to create key");
-
     Server::new()
         .bind("0.0.0.0:2222")
-        .host_key(key)
         .app(Ratatui {
             app: Counter::new(),
         })

@@ -48,7 +48,7 @@ async fn my_app(mut session: Session) -> shenron::Result<Session> {
 Then, all you need to do is create a server for your app, Shenron ships an always authenticating default SSH server with automatic key generation.
 
 ```rust
-Server::default()
+Server::new()
     .bind("0.0.0.0:2222")
     .app(my_app)
     .serve()
@@ -114,7 +114,6 @@ impl App for MyApp {
 
 Server::new()
     .bind("0.0.0.0:2222")
-    .host_key_file("host_key")?
     .app(Ratatui { app: MyApp::new() })
     .serve()
     .await

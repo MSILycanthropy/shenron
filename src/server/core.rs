@@ -28,9 +28,22 @@ pub struct Server {
 }
 
 impl Server {
+    /// Create a new instance of a Server
+    ///
+    /// # Panics
+    ///
+    /// Panics if creating the `host_key` fails
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let instance = Self::default();
+
+        let key = russh::keys::PrivateKey::random(
+            &mut rand::rngs::OsRng,
+            russh::keys::Algorithm::Ed25519,
+        )
+        .expect("Failed to create key");
+
+        instance.host_key(key)
     }
 
     #[must_use]

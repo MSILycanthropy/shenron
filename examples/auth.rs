@@ -29,10 +29,6 @@ async fn main() -> Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let key =
-        russh::keys::PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("Failed to create key");
-
     let allowed_users = vec!["admin", "alice", "bob"];
     let admin_password = "supersecret";
 
@@ -42,7 +38,6 @@ async fn main() -> Result<()> {
 
     Server::new()
         .bind("0.0.0.0:2222")
-        .host_key(key)
         .password_auth(move |user, password| {
             let allowed = allowed_users.clone();
             let admin_pw = admin_password;
