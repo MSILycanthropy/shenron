@@ -1,4 +1,4 @@
-# Shrenon
+# Shenron
 
 [wish]: https://github.com/charmbracelet/wish
 [ratatui]: https://github.com/ratatui/ratatui
