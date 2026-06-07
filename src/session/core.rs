@@ -5,12 +5,13 @@ use russh::{Channel, ChannelMsg, server::Msg};
 use crate::{Event, PtySize, SessionKind};
 
 pub struct Session {
-    channel: Channel<Msg>,
+    channel: Option<Channel<Msg>>,
     kind: SessionKind,
     user: String,
     env: HashMap<String, String>,
     remote_addr: SocketAddr,
     exit_code: Option<u32>,
+    exited: bool,
 }
 
 impl Session {
@@ -22,18 +23,19 @@ impl Session {
         remote_addr: SocketAddr,
     ) -> Self {
         Self {
-            channel,
+            channel: Some(channel),
             kind,
             user,
             env,
             remote_addr,
             exit_code: None,
+            exited: false,
         }
     }
 
     pub async fn next(&mut self) -> Option<Event> {
         loop {
-            let event = self.channel_mut().wait().await?;
+            let event = self.channel.as_mut()?.wait().await?;
 
             match event {
                 ChannelMsg::Data { data } => return Some(Event::Input(data.to_vec())),
@@ -136,7 +138,7 @@ impl Session {
     ///
     /// Returns `Err` if the message fails to send
     pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
-        self.channel().data(data).await.map_err(crate::Error::Ssh)
+        self.channel()?.data(data).await.map_err(crate::Error::Ssh)
     }
 
     /// Write a string to the channel
@@ -154,7 +156,7 @@ impl Session {
     ///
     /// Returns `Err` if the message fails to send
     pub async fn write_stderr(&self, data: &[u8]) -> crate::Result<()> {
-        self.channel()
+        self.channel()?
             .extended_data(1, data)
             .await
             .map_err(crate::Error::Ssh)
@@ -207,29 +209,38 @@ impl Session {
         matches!(self.kind, SessionKind::Pty { .. } | SessionKind::Shell)
     }
 
-    #[must_use]
-    pub const fn channel(&self) -> &Channel<Msg> {
-        &self.channel
+    fn channel(&self) -> crate::Result<&Channel<Msg>> {
+        self.channel
+            .as_ref()
+            .ok_or_else(|| crate::Error::Protocol("channel unavailable".into()))
     }
 
-    pub const fn channel_mut(&mut self) -> &mut Channel<Msg> {
-        &mut self.channel
-    }
-
-    /// WARNING: A call to this method bricks the session, use with the UTMOST caution.
+    /// Take ownership of the underlying channel, leaving the session without one.
+    ///
+    /// Subsequent reads/writes on the session will fail. Used by subsystems
+    /// like SFTP that need to drive the raw channel themselves.
     #[cfg(feature = "sftp")]
-    #[allow(unsafe_code, invalid_value)]
-    pub(crate) const fn unsafe_take_channel(&mut self) -> Channel<Msg> {
-        std::mem::replace(&mut self.channel, unsafe { std::mem::zeroed() })
+    pub(crate) const fn take_channel(&mut self) -> Option<Channel<Msg>> {
+        self.channel.take()
     }
 
-    pub(crate) async fn do_exit(&self) -> crate::Result<()> {
+    pub(crate) async fn do_exit(&mut self) -> crate::Result<()> {
+        if self.exited {
+            return Ok(());
+        }
+
         let Some(exit_code) = self.exit_code else {
             return Ok(());
         };
 
-        self.channel().exit_status(exit_code).await?;
-        self.channel().eof().await?;
-        self.channel().close().await.map_err(crate::Error::Ssh)
+        let Some(channel) = self.channel.as_ref() else {
+            return Ok(());
+        };
+
+        self.exited = true;
+
+        channel.exit_status(exit_code).await?;
+        channel.eof().await?;
+        channel.close().await.map_err(crate::Error::Ssh)
     }
 }

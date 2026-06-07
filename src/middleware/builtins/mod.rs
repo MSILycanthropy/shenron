@@ -8,7 +8,7 @@ pub mod logging;
 mod rate_limit;
 
 #[cfg(feature = "sftp")]
-mod sftp;
+pub mod sftp;
 
 pub use access_control::*;
 pub use active_term::*;

@@ -40,7 +40,7 @@ impl Server {
         let instance = Self::default();
 
         let key = russh::keys::PrivateKey::random(
-            &mut rand::rngs::OsRng,
+            &mut rand::rng(),
             russh::keys::Algorithm::Ed25519,
         )
         .expect("Failed to create key");
@@ -81,7 +81,7 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Reeturns `Err` if the banner file cannot be loaded
+    /// Returns `Err` if the banner file cannot be loaded
     pub fn banner_file(self, path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
         let banner = std::fs::read_to_string(path)?;
 
@@ -102,9 +102,9 @@ impl Server {
         self
     }
 
-    /// Add a middlware to the middlware stack
+    /// Add a middleware to the middleware stack
     ///
-    /// Middlware are executed outside-in: the first middleware
+    /// Middleware are executed outside-in: the first middleware
     /// is the outermost (ie it sees the session first and the result last)
     #[must_use]
     pub fn with<M: Middleware + Clone>(mut self, middleware: M) -> Self {
@@ -120,11 +120,12 @@ impl Server {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// Server::new()
+    /// ```no_run
+    /// # use shenron::Server;
+    /// let _server = Server::new()
     ///     .password_auth(|user, password| async move {
     ///         user == "admin" && password == "admin"
-    ///     })
+    ///     });
     /// ```
     #[must_use]
     pub fn password_auth<F, Fut>(mut self, handler: F) -> Self
@@ -143,11 +144,13 @@ impl Server {
     /// a boolean representing if the connection is accepted or rejected.
     ///
     /// # Example
-    /// ```rust
-    ///  Server::new()
+    /// ```no_run
+    /// # use shenron::Server;
+    /// # use russh::keys::HashAlg;
+    /// let _server = Server::new()
     ///     .pubkey_auth(|user, key| async move {
-    ///         allowed_keys.contains(&key.fingerprint())
-    ///     })
+    ///         key.fingerprint(HashAlg::Sha256).to_string() == "SHA256:abc123..."
+    ///     });
     /// ```
     #[must_use]
     pub fn pubkey_auth<F, Fut>(mut self, handler: F) -> Self
@@ -190,16 +193,18 @@ impl Server {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_run
+    /// # use shenron::{Server, Session};
+    /// # async fn run() -> shenron::Result<()> {
     /// Server::new()
     ///     .bind("127.0.0.1:2222")
-    ///     .host_key_file("host_key")?
-    ///     .with_graceful_shutdown(async {
+    ///     .shutdown_signal(async {
     ///         tokio::signal::ctrl_c().await.ok();
     ///     })
-    ///     .app(app)
+    ///     .app(|session: Session| async move { session.exit(0) })
     ///     .serve()
     ///     .await
+    /// # }
     /// ```
     #[must_use]
     pub fn shutdown_signal<F>(mut self, signal: F) -> Self

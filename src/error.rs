@@ -8,16 +8,16 @@ pub enum Error {
     #[error("Key error: {0}")]
     Keys(#[from] russh::keys::Error),
 
-    #[error("RuntimeError: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Protocol Error: {0}")]
+    #[error("Protocol error: {0}")]
     Protocol(String),
 
     #[error("Config error: {0}")]
     Config(String),
 
-    #[error("RuntimeError: {0}")]
+    #[error("Integer conversion error: {0}")]
     Int(#[from] std::num::TryFromIntError),
 }
 

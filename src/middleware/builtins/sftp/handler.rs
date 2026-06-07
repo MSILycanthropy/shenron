@@ -251,6 +251,34 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
 
         status_ok(id)
     }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        self.fs
+            .set_stat(&path, attrs.into())
+            .map_err(|_| StatusCode::Failure)?;
+
+        status_ok(id)
+    }
+
+    async fn fsetstat(
+        &mut self,
+        id: u32,
+        handle: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let Some(HandleType::File(f)) = self.handles.get_mut(&handle) else {
+            return Err(StatusCode::Failure);
+        };
+
+        f.set_stat(attrs.into()).map_err(|_| StatusCode::Failure)?;
+
+        status_ok(id)
+    }
 }
 
 #[allow(clippy::unnecessary_wraps)]

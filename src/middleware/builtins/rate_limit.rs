@@ -10,7 +10,12 @@ use crate::{Middleware, Next, Result, Session};
 type KeyedLimiter =
     GovernorLimiter<String, DashMapStateStore<String>, DefaultClock, NoOpMiddleware>;
 
-/// Middleware to add rate limiting per session
+/// Per-IP rate limiting for established sessions.
+///
+/// Note: this runs as middleware, so it only sees sessions that have already
+/// authenticated and opened a channel. It throttles abusive *session* rates,
+/// not raw connection or failed-auth floods — pair it with network-level
+/// limits (e.g. a firewall) if you need to defend the handshake itself.
 #[derive(Clone)]
 pub struct RateLimiter {
     limiter: Arc<KeyedLimiter>,

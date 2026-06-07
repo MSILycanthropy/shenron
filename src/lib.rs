@@ -7,6 +7,10 @@ mod session;
 #[cfg(feature = "ratatui")]
 pub mod tui;
 
+/// SFTP server support. Requires the `sftp` feature.
+#[cfg(feature = "sftp")]
+pub use middleware::builtins::sftp;
+
 use std::pin::Pin;
 
 pub use error::{Error, Result};

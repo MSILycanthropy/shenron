@@ -12,7 +12,11 @@ impl<F: Filesystem> Middleware for Sftp<F> {
     async fn handle(&self, mut session: Session, next: Next) -> Result<Session> {
         match session.kind() {
             SessionKind::Subsystem { name } if name == "sftp" => {
-                let stream = session.unsafe_take_channel().into_stream();
+                let Some(channel) = session.take_channel() else {
+                    return Ok(session);
+                };
+
+                let stream = channel.into_stream();
                 let handler = SftpHandler::new(self.fs.clone());
 
                 russh_sftp::server::run(stream, handler).await;

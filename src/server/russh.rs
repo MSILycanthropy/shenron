@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use russh::{
-    Channel, MethodKind,
+    Channel,
     keys::PublicKey,
     server::{Auth, Msg, Session as RusshSession},
 };
@@ -42,6 +42,23 @@ pub(crate) struct ShenronHandler {
     banner: Option<String>,
 }
 
+impl ShenronHandler {
+    /// Record the user on success, or build a rejection that only advertises
+    /// the auth methods this server actually has configured.
+    fn finish_auth(&mut self, user: &str, accepted: bool) -> Auth {
+        if accepted {
+            self.user = Some(user.to_string());
+
+            return Auth::Accept;
+        }
+
+        Auth::Reject {
+            proceed_with_methods: Some(self.auth.methods()),
+            partial_success: false,
+        }
+    }
+}
+
 impl russh::server::Handler for ShenronHandler {
     type Error = crate::Error;
 
@@ -54,36 +71,25 @@ impl russh::server::Handler for ShenronHandler {
         channel: Channel<Msg>,
         _session: &mut RusshSession,
     ) -> crate::Result<bool> {
+        // One app session per connection; reject additional channels rather
+        // than silently clobbering the first.
+        if self.channel.is_some() {
+            return Ok(false);
+        }
+
         self.channel = Some(channel);
 
         Ok(true)
     }
 
     async fn auth_publickey(&mut self, user: &str, public_key: &PublicKey) -> crate::Result<Auth> {
-        let mut accept = || -> crate::Result<Auth> {
-            self.user = Some(user.to_string());
-
-            Ok(Auth::Accept)
+        let accepted = if let Some(ref handler) = self.auth.pubkey {
+            handler.verify(user, public_key).await
+        } else {
+            self.auth.is_empty()
         };
 
-        let rejection = Ok(Auth::Reject {
-            proceed_with_methods: Some([MethodKind::Password].as_slice().into()),
-            partial_success: false,
-        });
-
-        if let Some(ref handler) = self.auth.pubkey {
-            if handler.verify(user, public_key).await {
-                return accept();
-            }
-
-            return rejection;
-        }
-
-        if self.auth.is_empty() {
-            return accept();
-        }
-
-        rejection
+        Ok(self.finish_auth(user, accepted))
     }
 
     async fn auth_password(
@@ -91,30 +97,13 @@ impl russh::server::Handler for ShenronHandler {
         user: &str,
         password: &str,
     ) -> crate::Result<russh::server::Auth> {
-        let mut accept = || -> crate::Result<Auth> {
-            self.user = Some(user.to_string());
-
-            Ok(Auth::Accept)
+        let accepted = if let Some(ref handler) = self.auth.password {
+            handler.verify(user, password).await
+        } else {
+            self.auth.is_empty()
         };
 
-        let rejection = Ok(Auth::Reject {
-            proceed_with_methods: None,
-            partial_success: false,
-        });
-
-        if let Some(ref handler) = self.auth.password {
-            if handler.verify(user, password).await {
-                return accept();
-            }
-
-            return rejection;
-        }
-
-        if self.auth.is_empty() {
-            return accept();
-        }
-
-        rejection
+        Ok(self.finish_auth(user, accepted))
     }
 
     async fn env_request(
@@ -160,9 +149,9 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        run_handler(handler, app_session);
-
         session.channel_success(channel_id)?;
+
+        run_handler(handler, app_session);
 
         Ok(())
     }
@@ -220,9 +209,9 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        run_handler(handler, app_session);
-
         session.channel_success(channel_id)?;
+
+        run_handler(handler, app_session);
 
         Ok(())
     }
@@ -252,9 +241,9 @@ impl russh::server::Handler for ShenronHandler {
 
         let handler = Arc::clone(&self.handler);
 
-        run_handler(handler, app_session);
-
         session.channel_success(channel_id)?;
+
+        run_handler(handler, app_session);
 
         Ok(())
     }
@@ -263,7 +252,7 @@ impl russh::server::Handler for ShenronHandler {
 fn run_handler(handler: Arc<dyn ErasedHandler>, session: Session) {
     tokio::spawn(async move {
         match handler.call(session).await {
-            Ok(session) => {
+            Ok(mut session) => {
                 let _ = session.do_exit().await;
             }
             Err(e) => {

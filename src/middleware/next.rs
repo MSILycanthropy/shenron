@@ -12,7 +12,7 @@ impl Next {
         Self { inner: handler }
     }
 
-    /// Run the next middlware in the chain
+    /// Run the next middleware in the chain
     ///
     /// # Errors
     ///

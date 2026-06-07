@@ -207,3 +207,35 @@ fn parse_utf8_char(data: &[u8]) -> Option<KeyEvent> {
 
     Some(KeyEvent::new(KeyCode::Char(c), modifiers))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_key_event;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn empty_input_is_none() {
+        assert!(parse_key_event(&[]).is_none());
+    }
+
+    #[test]
+    fn arrow_up_escape_sequence() {
+        let key = parse_key_event(&[27, 91, 65]).expect("arrow up");
+        assert_eq!(key.code, KeyCode::Up);
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn ctrl_c_is_control_char() {
+        let key = parse_key_event(&[3]).expect("ctrl-c");
+        assert_eq!(key.code, KeyCode::Char('c'));
+        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn uppercase_letter_carries_shift() {
+        let key = parse_key_event(b"A").expect("uppercase A");
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+    }
+}

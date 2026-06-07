@@ -5,14 +5,16 @@ use crate::{Result, Session};
 /// A handler for SSH sessions.
 ///
 /// This trait is automatically implemented for any function or closure
-/// with the signature `Fn(Session) -> Future<Output = Result<()>>`.
+/// with the signature `Fn(Session) -> Future<Output = Result<Session>>`.
 ///
 /// # Example
 ///
-/// ```rust
-/// async fn my_app(mut session: Session) -> shenron::Result<()> {
+/// ```
+/// use shenron::{Result, Session};
+///
+/// async fn my_app(mut session: Session) -> Result<Session> {
 ///     session.write_str("Hello!\r\n").await?;
-///     Ok(())
+///     session.exit(0)
 /// }
 /// ```
 pub trait Handler: Send + Sync + Clone + 'static {

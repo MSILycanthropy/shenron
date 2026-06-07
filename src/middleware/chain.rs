@@ -7,11 +7,11 @@ use crate::{
 
 pub(crate) fn build_chain(
     handler: impl Handler,
-    middlware: Vec<Arc<dyn ErasedMiddleware>>,
+    middleware: Vec<Arc<dyn ErasedMiddleware>>,
 ) -> Arc<dyn ErasedHandler> {
     let mut chain: Arc<dyn ErasedHandler> = Arc::new(handler);
 
-    for mw in middlware.into_iter().rev() {
+    for mw in middleware.into_iter().rev() {
         chain = Arc::new(MiddlewareHandler {
             middleware: mw,
             next: chain,

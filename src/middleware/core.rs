@@ -7,15 +7,14 @@ use crate::{Next, Result, Session};
 ///
 /// # Example
 ///
-/// ```rust
-/// use shenron::{Middleware, Next, Session, Result};
-/// use std::time::Instant;
+/// ```
+/// use shenron::{Middleware, Next, Result, Session};
 ///
 /// #[derive(Clone)]
 /// struct LoggingMiddleware;
 ///
 /// impl Middleware for LoggingMiddleware {
-///     async fn handle(&self, session: Session, next: Next) -> Result<()> {
+///     async fn handle(&self, session: Session, next: Next) -> Result<Session> {
 ///         let user = session.user().to_owned();
 ///         tracing::info!("{} connected", user);
 ///

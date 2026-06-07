@@ -19,7 +19,7 @@ to provide a UI for users.
 Shenron is an SSH server with sensible defaults and a collection of middleware to make
 building SSH applications painless. Shenron is inspired heavily by [charmbracelet/wish][wish].
 
-Shenron is built on [Eugeny/russh][russh], so OpenSSH is not needed at all. Thus, there is no risk of leaking a shell, because there is no behavior that does so in Shenron.
+Shenron is built on [Eugeny/russh][russh], so OpenSSH is not needed at all. Shenron never spawns a shell or executes commands on its own — your handler decides exactly what every session can do, so there's no `openssh-server` behavior to accidentally expose.
 
 ## What is an SSH app?
 
@@ -57,7 +57,7 @@ Server::new()
 
 ## Examples
 
-There are examples for a standalone [Ratatui app](examples/ratatui) and others in the [examples](examples) folder.
+There are examples for a standalone [Ratatui app](examples/tui.rs) and others in the [examples](examples) folder.
 
 ## Middleware
 
@@ -166,12 +166,12 @@ Reject connections without an active PTY. Useful when your app requires a termin
 like most TUI applications.
 
 ```rust
-use shenron::middleware::activeterm;
+use shenron::middleware::active_term;
 
 Server::new()
     .bind("0.0.0.0:2222")
     .host_key_file("host_key")?
-    .with(activeterm)
+    .with(active_term)
     .app(my_tui_app)
     .serve()
     .await
@@ -199,7 +199,10 @@ Commands not in the allowlist get rejected with exit code 1.
 
 ### Rate Limiting
 
-Per-IP rate limiting to prevent abuse.
+Per-IP rate limiting for established sessions. Because it runs as middleware,
+it throttles authenticated session rates rather than raw connection or
+failed-auth floods — pair it with a firewall if you need to protect the
+handshake itself.
 
 ```rust
 use shenron::middleware::RateLimiter;

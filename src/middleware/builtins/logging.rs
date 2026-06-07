@@ -2,7 +2,7 @@ use tracing::{error, info};
 
 use crate::{Next, Session, SessionKind};
 
-/// Middleware that logs session starting, ending and erors
+/// Middleware that logs session starting, ending and errors
 ///
 /// # Errors
 ///

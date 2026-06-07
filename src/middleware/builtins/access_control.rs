@@ -36,3 +36,26 @@ impl Middleware for AccessControl {
         session.exit(1)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AccessControl;
+
+    #[test]
+    fn only_listed_commands_are_allowed() {
+        let ac = AccessControl::new(["ls", "cat"]);
+
+        assert!(ac.is_allowed("ls"));
+        assert!(ac.is_allowed("cat"));
+        assert!(!ac.is_allowed("rm"));
+        assert!(!ac.is_allowed(""));
+    }
+
+    #[test]
+    fn matching_is_exact_not_prefix() {
+        let ac = AccessControl::new(["ls"]);
+
+        assert!(!ac.is_allowed("lsof"));
+        assert!(!ac.is_allowed("ls -la"));
+    }
+}
