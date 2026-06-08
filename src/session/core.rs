@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use russh::{Channel, ChannelMsg, server::Msg};
+use russh::{Channel, ChannelMsg, keys::PublicKey, server::Msg};
 
 use crate::{Event, PtySize, SessionKind};
 
@@ -8,6 +8,7 @@ pub struct Session {
     channel: Option<Channel<Msg>>,
     kind: SessionKind,
     user: String,
+    public_key: Option<PublicKey>,
     env: HashMap<String, String>,
     remote_addr: SocketAddr,
     exit_code: Option<u32>,
@@ -19,6 +20,7 @@ impl Session {
         channel: Channel<Msg>,
         kind: SessionKind,
         user: String,
+        public_key: Option<PublicKey>,
         env: HashMap<String, String>,
         remote_addr: SocketAddr,
     ) -> Self {
@@ -26,6 +28,7 @@ impl Session {
             channel: Some(channel),
             kind,
             user,
+            public_key,
             env,
             remote_addr,
             exit_code: None,
@@ -120,6 +123,15 @@ impl Session {
     #[must_use]
     pub fn user(&self) -> &str {
         &self.user
+    }
+
+    /// The public key the session authenticated with, if any.
+    ///
+    /// Returns `None` when the user authenticated by password or when no auth
+    /// handler was configured.
+    #[must_use]
+    pub const fn public_key(&self) -> Option<&PublicKey> {
+        self.public_key.as_ref()
     }
 
     #[must_use]

@@ -23,6 +23,7 @@ impl russh::server::Server for ShenronServer {
             remote_addr: addr.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
             channel: None,
             user: None,
+            public_key: None,
             auth: Arc::clone(&self.auth),
             env: HashMap::new(),
             pty: None,
@@ -36,6 +37,7 @@ pub(crate) struct ShenronHandler {
     remote_addr: SocketAddr,
     channel: Option<Channel<Msg>>,
     user: Option<String>,
+    public_key: Option<PublicKey>,
     auth: Arc<AuthConfig>,
     env: HashMap<String, String>,
     pty: Option<(String, PtySize)>,
@@ -88,6 +90,10 @@ impl russh::server::Handler for ShenronHandler {
         } else {
             self.auth.is_empty()
         };
+
+        if accepted {
+            self.public_key = Some(public_key.clone());
+        }
 
         Ok(self.finish_auth(user, accepted))
     }
@@ -143,6 +149,7 @@ impl russh::server::Handler for ShenronHandler {
             channel,
             kind,
             user,
+            self.public_key.clone(),
             std::mem::take(&mut self.env),
             self.remote_addr,
         );
@@ -203,6 +210,7 @@ impl russh::server::Handler for ShenronHandler {
             channel,
             kind,
             user,
+            self.public_key.clone(),
             std::mem::take(&mut self.env),
             self.remote_addr,
         );
@@ -235,6 +243,7 @@ impl russh::server::Handler for ShenronHandler {
                 name: name.to_string(),
             },
             user,
+            self.public_key.clone(),
             std::mem::take(&mut self.env),
             self.remote_addr,
         );
