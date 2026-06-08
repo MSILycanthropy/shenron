@@ -1,7 +1,10 @@
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{path::Path, pin::Pin, sync::Arc, time::Duration};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use russh::{
-    keys::{PrivateKey, PublicKey},
+    keys::{Algorithm, PrivateKey, PublicKey, ssh_key::LineEnding},
     server::{Config, Server as _},
 };
 
@@ -13,6 +16,10 @@ use crate::{
 };
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// Where the default host key is generated when none is configured.
+/// Matches Wish, which writes `id_ed25519` to the working directory.
+const DEFAULT_HOST_KEY_PATH: &str = "id_ed25519";
 
 #[derive(Default)]
 pub struct Server {
@@ -32,20 +39,12 @@ pub struct Server {
 impl Server {
     /// Create a new instance of a Server
     ///
-    /// # Panics
-    ///
-    /// Panics if creating the `host_key` fails
+    /// No host key is generated here. If none is configured before
+    /// [`serve`](Self::serve), a default Ed25519 key is generated and persisted
+    /// to [`DEFAULT_HOST_KEY_PATH`] (and reused on the next start).
     #[must_use]
     pub fn new() -> Self {
-        let instance = Self::default();
-
-        let key = russh::keys::PrivateKey::random(
-            &mut rand::rng(),
-            russh::keys::Algorithm::Ed25519,
-        )
-        .expect("Failed to create key");
-
-        instance.host_key(key)
+        Self::default()
     }
 
     #[must_use]
@@ -65,8 +64,29 @@ impl Server {
     /// # Errors
     ///
     /// Returns `Err` if the key file cannot be loaded
-    pub fn host_key_file(self, path: impl AsRef<std::path::Path>) -> crate::Result<Self> {
+    pub fn host_key_file(self, path: impl AsRef<Path>) -> crate::Result<Self> {
         let key = russh::keys::load_secret_key(path, None)?;
+
+        Ok(self.host_key(key))
+    }
+
+    /// Add a host key from a path, generating and persisting one if it is missing
+    ///
+    /// On first run this writes a new Ed25519 private key to `path` and its
+    /// public key to `<path>.pub`; later runs load the existing key so the
+    /// server keeps a stable identity across restarts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the key cannot be loaded, generated, or written
+    pub fn host_key_path(self, path: impl AsRef<Path>) -> crate::Result<Self> {
+        let path = path.as_ref();
+
+        let key = if path.exists() {
+            russh::keys::load_secret_key(path, None)?
+        } else {
+            generate_and_persist(path)?
+        };
 
         Ok(self.host_key(key))
     }
@@ -221,18 +241,18 @@ impl Server {
     ///
     /// Returns `Err` if
     /// - No bind address was specified
-    /// - No host keys were supplied
+    /// - A default host key had to be generated and writing it failed
     /// - The server failed to start
-    pub async fn serve(self) -> crate::Result<()> {
+    pub async fn serve(mut self) -> crate::Result<()> {
+        if self.keys.is_empty() {
+            self = self.host_key_path(DEFAULT_HOST_KEY_PATH)?;
+        }
+
         let config = self.config();
 
         let addr = self
             .addr
             .ok_or_else(|| crate::Error::Config("No bind address specified".into()))?;
-
-        if self.keys.is_empty() {
-            return Err(crate::Error::Config("No host keys specified".into()));
-        }
 
         let handler = self
             .app
@@ -290,4 +310,31 @@ impl Server {
 
         Arc::new(config)
     }
+}
+
+/// Generate a fresh Ed25519 host key, write it to `path` (and its public half
+/// to `<path>.pub`), and return it. Private key is `0o600`, parent dir `0o700`.
+fn generate_and_persist(path: &Path) -> crate::Result<PrivateKey> {
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    key.write_openssh_file(path, LineEnding::LF)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+
+    // Wish writes `<path>.pub`; append rather than replace any extension.
+    let mut pub_path = path.as_os_str().to_owned();
+    pub_path.push(".pub");
+    key.public_key().write_openssh_file(Path::new(&pub_path))?;
+
+    tracing::info!("Generated host key at {}", path.display());
+
+    Ok(key)
 }

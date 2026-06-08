@@ -55,6 +55,21 @@ Server::new()
     .await
 ```
 
+When no host key is configured, Shenron generates an Ed25519 key, writes it to
+`id_ed25519` (and `id_ed25519.pub`) in the working directory, and reuses it on
+the next start — so the server keeps a stable identity across restarts. To pick
+the location yourself, use `host_key_path`, which loads the key if it exists and
+generates one if it doesn't:
+
+```rust
+Server::new()
+    .bind("0.0.0.0:2222")
+    .host_key_path("host_key")?
+    .app(my_app)
+    .serve()
+    .await
+```
+
 ## Examples
 
 There are examples for a standalone [Ratatui app](examples/tui.rs) and others in the [examples](examples) folder.
@@ -78,7 +93,7 @@ meaning it sees the session first and the result last.
 ```rust
 Server::new()
     .bind("0.0.0.0:2222")
-    .host_key_file("host_key")?
+    .host_key_path("host_key")?
     .with(logging)        // 1st: sees session first, result last
     .with(activeterm)     // 2nd: runs inside logging
     .app(my_app)          // innermost: your application

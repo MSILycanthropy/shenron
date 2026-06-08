@@ -8,6 +8,9 @@ pub enum Error {
     #[error("Key error: {0}")]
     Keys(#[from] russh::keys::Error),
 
+    #[error("SSH key error: {0}")]
+    SshKey(#[from] russh::keys::ssh_key::Error),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
