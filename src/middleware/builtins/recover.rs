@@ -1,0 +1,141 @@
+use std::{any::Any, net::SocketAddr, sync::Arc};
+
+use tracing::error;
+
+use crate::{Error, Middleware, Next, Result, Session};
+
+/// A panic caught while running the sub-chain, with the session context that was
+/// captured before the session was moved into `next`.
+struct Panicked {
+    message: String,
+    user: String,
+    remote: SocketAddr,
+}
+
+/// Run the rest of the chain on its own task so tokio catches any panic at the
+/// task boundary, surfacing it as a `JoinError` instead of unwinding through us.
+///
+/// `Ok` carries the chain's own result (which may itself be `Err`); the outer
+/// `Err` means the chain panicked.
+async fn guard(session: Session, next: Next) -> std::result::Result<Result<Session>, Panicked> {
+    let user = session.user().to_owned();
+    let remote = session.remote_addr();
+
+    match tokio::spawn(next.run(session)).await {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            let message = if e.is_panic() {
+                panic_message(e.into_panic())
+            } else {
+                "handler task cancelled".to_string()
+            };
+            Err(Panicked {
+                message,
+                user,
+                remote,
+            })
+        }
+    }
+}
+
+/// Downcast a panic payload to a readable message. Panics carrying a `&str` or
+/// `String` (the common cases) are recovered verbatim; anything else is opaque.
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    let payload = match payload.downcast::<&'static str>() {
+        Ok(s) => return (*s).to_string(),
+        Err(other) => other,
+    };
+
+    payload
+        .downcast::<String>()
+        .map_or_else(|_| "unknown panic payload".to_string(), |s| *s)
+}
+
+/// Middleware that contains a panicking handler or middleware instead of letting
+/// it drop the session abruptly.
+///
+/// A panic in the wrapped chain is logged via `tracing` and converted into
+/// [`Error::Panic`], so outer middleware still run their after-`next` logic and
+/// the connection closes cleanly. The server and other sessions are unaffected.
+///
+/// Place it just inside your observability middleware (e.g.
+/// `.with(logging).with(recover).with(app)`) so a panic becomes an `Err` those
+/// outer layers can still observe.
+///
+/// # Errors
+///
+/// Returns [`Error::Panic`] if the wrapped chain panics, otherwise propagates
+/// the chain's own result.
+pub async fn recover(session: Session, next: Next) -> Result<Session> {
+    match guard(session, next).await {
+        Ok(result) => result,
+        Err(p) => {
+            error!(user = %p.user, remote = %p.remote, panic = %p.message, "handler panicked");
+            Err(Error::Panic(p.message))
+        }
+    }
+}
+
+/// Details of a caught panic, passed to a [`recover_with`] callback.
+pub struct PanicReport<'a> {
+    pub message: &'a str,
+    pub user: &'a str,
+    pub remote: SocketAddr,
+}
+
+/// Like [`recover`], but also invokes a callback on panic — for shipping the
+/// panic to metrics, error reporting, etc. Build it with [`recover_with`].
+#[derive(Clone)]
+pub struct RecoverWith(Arc<dyn Fn(&PanicReport) + Send + Sync>);
+
+/// Construct a [`RecoverWith`] middleware from a panic callback.
+pub fn recover_with(callback: impl Fn(&PanicReport) + Send + Sync + 'static) -> RecoverWith {
+    RecoverWith(Arc::new(callback))
+}
+
+impl Middleware for RecoverWith {
+    async fn handle(&self, session: Session, next: Next) -> Result<Session> {
+        match guard(session, next).await {
+            Ok(result) => result,
+            Err(p) => {
+                error!(user = %p.user, remote = %p.remote, panic = %p.message, "handler panicked");
+                (self.0)(&PanicReport {
+                    message: &p.message,
+                    user: &p.user,
+                    remote: p.remote,
+                });
+                Err(Error::Panic(p.message))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panic_message;
+
+    #[track_caller]
+    fn payload_of(f: impl FnOnce() + std::panic::UnwindSafe) -> Box<dyn std::any::Any + Send> {
+        let Err(payload) = std::panic::catch_unwind(f) else {
+            panic!("closure did not panic");
+        };
+        payload
+    }
+
+    #[test]
+    fn recovers_str_payload() {
+        assert_eq!(panic_message(payload_of(|| panic!("boom"))), "boom");
+    }
+
+    #[test]
+    fn recovers_string_payload() {
+        let payload = payload_of(|| panic!("{}", String::from("dynamic")));
+        assert_eq!(panic_message(payload), "dynamic");
+    }
+
+    #[test]
+    fn opaque_for_non_string_payload() {
+        let payload = payload_of(|| std::panic::panic_any(42_u32));
+        assert_eq!(panic_message(payload), "unknown panic payload");
+    }
+}

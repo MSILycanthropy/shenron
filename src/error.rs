@@ -20,6 +20,9 @@ pub enum Error {
     #[error("Config error: {0}")]
     Config(String),
 
+    #[error("Handler panicked: {0}")]
+    Panic(String),
+
     #[error("Integer conversion error: {0}")]
     Int(#[from] std::num::TryFromIntError),
 }

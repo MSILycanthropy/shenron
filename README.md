@@ -175,6 +175,51 @@ Server::new()
     .await
 ```
 
+### Recover
+
+Contain a panicking handler or middleware instead of letting it drop the session
+abruptly. The panic is logged via `tracing` (with the user and remote address)
+and converted into an error, so the connection closes cleanly and the server and
+other sessions keep running.
+
+```rust
+use shenron::middleware::{logging, recover};
+
+Server::new()
+    .bind("0.0.0.0:2222")
+    .host_key_file("host_key")?
+    .with(logging)   // outside recover: still logs the session ending
+    .with(recover)   // catches panics in everything below it
+    .app(my_app)
+    .serve()
+    .await
+```
+
+Placement matters: `recover` only catches panics from the middleware and app
+*inside* it. Put it just inside your observability middleware (`logging`,
+`elapsed`, `Comment`) so a panic becomes an error those outer layers still see —
+their "after" logic runs and you keep the disconnect log. A panic in middleware
+placed *outside* `recover` is not caught.
+
+To also forward panics somewhere (metrics, error reporting), use `recover_with`:
+
+```rust
+use shenron::middleware::recover_with;
+
+Server::new()
+    .bind("0.0.0.0:2222")
+    .host_key_file("host_key")?
+    .with(recover_with(|report| {
+        metrics::increment(&report.user, report.message);
+    }))
+    .app(my_app)
+    .serve()
+    .await
+```
+
+`recover` relies on unwinding panics, which is the default. If your build profile
+sets `panic = "abort"`, the process aborts before anything can be recovered.
+
 ### Active Terminal
 
 Reject connections without an active PTY. Useful when your app requires a terminal,

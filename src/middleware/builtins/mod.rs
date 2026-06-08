@@ -3,6 +3,7 @@ pub mod active_term;
 pub mod comment;
 pub mod elapsed;
 pub mod logging;
+pub mod recover;
 
 #[cfg(feature = "rate-limiting")]
 mod rate_limit;
@@ -15,6 +16,7 @@ pub use active_term::*;
 pub use comment::*;
 pub use elapsed::*;
 pub use logging::*;
+pub use recover::*;
 
 #[cfg(feature = "rate-limiting")]
 pub use rate_limit::*;
