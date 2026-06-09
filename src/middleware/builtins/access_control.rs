@@ -1,5 +1,16 @@
 use crate::{Middleware, Next, Result, Session};
 
+/// Allowlist of programs an exec request may run (Wish `accesscontrol` parity).
+///
+/// Compares the *program* — `argv[0]` of the POSIX-parsed command — exactly
+/// against the list, so allowing `git` permits `git push` and `git pull`
+/// alike. Sessions without an exec command (shells, subsystems) pass through
+/// untouched. Commands that fail to parse are denied.
+///
+/// This is only a security boundary if the app executes the parsed argv
+/// directly (`Command::new(&argv[0]).args(&argv[1..])`). Never hand
+/// [`Session::raw_command`] to a shell: `allowed && anything` parses with
+/// `argv[0] == "allowed"` and would sail through this check.
 pub struct AccessControl {
     allowed: Vec<String>,
 }
@@ -11,24 +22,27 @@ impl AccessControl {
         }
     }
 
-    fn is_allowed(&self, cmd: &str) -> bool {
-        self.allowed.iter().any(|allowed| allowed == cmd)
+    fn is_allowed(&self, program: &str) -> bool {
+        self.allowed.iter().any(|allowed| allowed == program)
     }
 }
 
 impl Middleware for AccessControl {
     async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
-        let Some(command) = session.command() else {
-            return next.run(session).await;
-        };
-
-        let cmd = command.split_whitespace().next().unwrap_or("");
-
-        if self.is_allowed(cmd) {
+        if session.raw_command().is_none() {
             return next.run(session).await;
         }
 
-        let message = format!("Command not allowed: {cmd}\n");
+        if let Some(argv) = session.command()
+            && let Some(program) = argv.first()
+            && self.is_allowed(program)
+        {
+            return next.run(session).await;
+        }
+
+        let raw = session.raw_command().unwrap_or_default();
+        let message = format!("Command not allowed: {raw}\n");
+
         session.write_stderr_str(&message).await?;
 
         session.exit(1)
@@ -40,7 +54,7 @@ mod tests {
     use super::AccessControl;
 
     #[test]
-    fn only_listed_commands_are_allowed() {
+    fn only_listed_programs_are_allowed() {
         let ac = AccessControl::new(["ls", "cat"]);
 
         assert!(ac.is_allowed("ls"));

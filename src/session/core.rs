@@ -104,8 +104,24 @@ impl Session {
         self.pty.as_ref().map(|(term, size)| (term.as_str(), *size))
     }
 
+    /// The exec command as POSIX-parsed argv (Wish's `Command()`).
+    ///
+    /// `None` for non-exec sessions and for commands with invalid quoting —
+    /// check [`raw_command`](Self::raw_command) to tell those apart.
+    ///
+    /// Execute the tokens directly (`Command::new(&argv[0]).args(&argv[1..])`);
+    /// joining them back into one shell string reintroduces injection.
     #[must_use]
-    pub fn command(&self) -> Option<&str> {
+    pub fn command(&self) -> Option<Vec<String>> {
+        match &self.kind {
+            SessionKind::Exec { command } => shell_words::split(command).ok(),
+            _ => None,
+        }
+    }
+
+    /// The exec command exactly as the client sent it (Wish's `RawCommand()`).
+    #[must_use]
+    pub fn raw_command(&self) -> Option<&str> {
         match &self.kind {
             SessionKind::Exec { command } => Some(command),
             _ => None,

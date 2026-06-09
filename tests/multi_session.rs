@@ -11,13 +11,17 @@ use shenron::Session;
 /// Echo back everything a session inherited, one field per fix under test.
 async fn app(session: &mut Session) -> shenron::Result {
     let account = session.get::<Account>().map_or(0, |a| a.0);
-    let command = session.command().unwrap_or("none").to_owned();
+    let command = session.raw_command().unwrap_or("none").to_owned();
+    let argv0 = session
+        .command()
+        .and_then(|argv| argv.first().cloned())
+        .unwrap_or_default();
     let pty = session.pty().is_some();
     let marker = session.env().get("MARKER").cloned().unwrap_or_default();
 
     session
         .write_str(&format!(
-            "account={account};command={command};pty={pty};marker={marker}"
+            "account={account};command={command};argv0={argv0};pty={pty};marker={marker}"
         ))
         .await?;
 
@@ -44,11 +48,11 @@ async fn second_session_keeps_auth_data_and_own_env() {
 
     assert_eq!(
         out_first.stdout,
-        "account=42;command=first;pty=false;marker=one"
+        "account=42;command=first;argv0=first;pty=false;marker=one"
     );
     assert_eq!(
         out_second.stdout,
-        "account=42;command=second;pty=false;marker=two"
+        "account=42;command=second;argv0=second;pty=false;marker=two"
     );
 }
 
@@ -68,6 +72,6 @@ async fn pty_exec_keeps_the_command() {
 
     assert_eq!(
         out.stdout,
-        "account=42;command=deploy --prod;pty=true;marker="
+        "account=42;command=deploy --prod;argv0=deploy;pty=true;marker="
     );
 }

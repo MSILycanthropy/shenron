@@ -23,6 +23,7 @@ ratatui = { version = "0.30", optional = true, features = [
 ] }
 russh = { version = "0.61", features = ["aws-lc-rs"] }
 russh-sftp = { version = "2.3", optional = true }
+shell-words = "1"
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }
 tracing = "0.1.44"
