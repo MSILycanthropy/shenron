@@ -1,25 +1,22 @@
-use crate::{BoxFuture, Handler, Middleware, Next, Result, Session};
+use std::pin::Pin;
 
-/// Type-erased Handler for the middleware chain
-pub(crate) trait ErasedHandler: Send + Sync {
-    fn call(&self, session: Session) -> BoxFuture<Result<Session>>;
-}
+use crate::{Middleware, Next, Result, Session};
 
-impl<H: Handler> ErasedHandler for H {
-    fn call(&self, session: Session) -> BoxFuture<Result<Session>> {
-        Box::pin(Handler::call(self, session))
-    }
-}
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Type-erased middleware for storage in the server
+/// Type-erased middleware for storage in the server.
 pub(crate) trait ErasedMiddleware: Send + Sync {
-    fn handle(&self, session: Session, next: Next) -> BoxFuture<Result<Session>>;
+    fn handle<'a>(&'a self, session: &'a mut Session, next: Next<'a>) -> BoxFuture<'a, Result>;
 }
 
 impl<M: Middleware> ErasedMiddleware for M {
-    fn handle(&self, session: Session, next: Next) -> BoxFuture<Result<Session>> {
-        let this = self.clone();
-
-        Box::pin(async move { Middleware::handle(&this, session, next).await })
+    fn handle<'a>(&'a self, session: &'a mut Session, next: Next<'a>) -> BoxFuture<'a, Result> {
+        Box::pin(Middleware::handle(self, session, next))
     }
+}
+
+/// Type-erased handler for the middleware chain. Implemented only by the chain's
+/// `Base` and `MiddlewareHandler` (see `chain.rs`).
+pub(crate) trait ErasedHandler: Send + Sync {
+    fn call<'a>(&'a self, session: &'a mut Session) -> BoxFuture<'a, Result>;
 }

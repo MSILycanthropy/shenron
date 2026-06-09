@@ -1,41 +1,44 @@
-use std::{any::Any, net::SocketAddr, sync::Arc};
+use std::{
+    any::Any, future::poll_fn, net::SocketAddr, panic::AssertUnwindSafe, sync::Arc, task::Poll,
+};
 
 use tracing::error;
 
 use crate::{Error, Middleware, Next, Result, Session};
 
 /// A panic caught while running the sub-chain, with the session context that was
-/// captured before the session was moved into `next`.
+/// captured before the session was borrowed into `next`.
 struct Panicked {
     message: String,
     user: String,
     remote: SocketAddr,
 }
 
-/// Run the rest of the chain on its own task so tokio catches any panic at the
-/// task boundary, surfacing it as a `JoinError` instead of unwinding through us.
+/// Drive the rest of the chain, wrapping each `poll` in [`catch_unwind`] so a
+/// panic becomes an `Err` instead of unwinding through us.
 ///
 /// `Ok` carries the chain's own result (which may itself be `Err`); the outer
 /// `Err` means the chain panicked.
-async fn guard(session: Session, next: Next) -> std::result::Result<Result<Session>, Panicked> {
+///
+/// [`catch_unwind`]: std::panic::catch_unwind
+async fn guard(session: &mut Session, next: Next<'_>) -> std::result::Result<Result, Panicked> {
     let user = session.user().to_owned();
     let remote = session.remote_addr();
 
-    match tokio::spawn(next.run(session)).await {
-        Ok(result) => Ok(result),
-        Err(e) => {
-            let message = if e.is_panic() {
-                panic_message(e.into_panic())
-            } else {
-                "handler task cancelled".to_string()
-            };
-            Err(Panicked {
-                message,
-                user,
-                remote,
-            })
+    let mut fut = Box::pin(next.run(session));
+    let outcome = poll_fn(|cx| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+            Ok(poll) => poll.map(Ok),
+            Err(panic) => Poll::Ready(Err(panic)),
         }
-    }
+    })
+    .await;
+
+    outcome.map_err(|panic| Panicked {
+        message: panic_message(panic),
+        user,
+        remote,
+    })
 }
 
 /// Downcast a panic payload to a readable message. Panics carrying a `&str` or
@@ -59,14 +62,14 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
 /// the connection closes cleanly. The server and other sessions are unaffected.
 ///
 /// Place it just inside your observability middleware (e.g.
-/// `.with(logging).with(recover).with(app)`) so a panic becomes an `Err` those
-/// outer layers can still observe.
+/// `.with(logging).with(recover).app(your_app)`) so a panic becomes an `Err`
+/// those outer layers can still observe.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Panic`] if the wrapped chain panics, otherwise propagates
 /// the chain's own result.
-pub async fn recover(session: Session, next: Next) -> Result<Session> {
+pub async fn recover(session: &mut Session, next: Next<'_>) -> Result {
     match guard(session, next).await {
         Ok(result) => result,
         Err(p) => {
@@ -94,7 +97,7 @@ pub fn recover_with(callback: impl Fn(&PanicReport) + Send + Sync + 'static) -> 
 }
 
 impl Middleware for RecoverWith {
-    async fn handle(&self, session: Session, next: Next) -> Result<Session> {
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
         match guard(session, next).await {
             Ok(result) => result,
             Err(p) => {

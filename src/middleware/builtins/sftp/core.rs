@@ -9,11 +9,11 @@ pub struct Sftp<F: Filesystem> {
 }
 
 impl<F: Filesystem> Middleware for Sftp<F> {
-    async fn handle(&self, mut session: Session, next: Next) -> Result<Session> {
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
         match session.kind() {
             SessionKind::Subsystem { name } if name == "sftp" => {
                 let Some(channel) = session.take_channel() else {
-                    return Ok(session);
+                    return Ok(());
                 };
 
                 let stream = channel.into_stream();
@@ -21,7 +21,7 @@ impl<F: Filesystem> Middleware for Sftp<F> {
 
                 russh_sftp::server::run(stream, handler).await;
 
-                Ok(session)
+                Ok(())
             }
             _ => next.run(session).await,
         }

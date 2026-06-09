@@ -5,7 +5,7 @@ async fn main() -> shenron::Result<()> {
     Server::new().bind("0.0.0.0:2222").app(app).serve().await
 }
 
-async fn app(session: Session) -> shenron::Result<Session> {
+async fn app(session: &mut Session) -> shenron::Result {
     session.write_str("Environment variables:\r\n").await?;
     session.write_str("----------------------\r\n").await?;
 

@@ -13,7 +13,7 @@ async fn main() -> shenron::Result<()> {
     Ok(())
 }
 
-async fn app(mut session: Session) -> shenron::Result<Session> {
+async fn app(session: &mut Session) -> shenron::Result {
     match session.kind() {
         SessionKind::Subsystem { name } => match name.as_str() {
             "echo" => {

@@ -1,6 +1,6 @@
 use shenron::{Event, Result, Server, Session};
 
-async fn whoami(mut session: Session) -> Result<Session> {
+async fn whoami(session: &mut Session) -> Result {
     session
         .write_str(&format!(
             "Welcome {}! You're connected from {}\r\n",

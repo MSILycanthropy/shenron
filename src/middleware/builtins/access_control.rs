@@ -1,6 +1,5 @@
 use crate::{Middleware, Next, Result, Session};
 
-#[derive(Clone)]
 pub struct AccessControl {
     allowed: Vec<String>,
 }
@@ -18,7 +17,7 @@ impl AccessControl {
 }
 
 impl Middleware for AccessControl {
-    async fn handle(&self, session: Session, next: Next) -> Result<Session> {
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
         let Some(command) = session.command() else {
             return next.run(session).await;
         };
@@ -29,9 +28,8 @@ impl Middleware for AccessControl {
             return next.run(session).await;
         }
 
-        session
-            .write_stderr_str(&format!("Command not allowed: {cmd}\n"))
-            .await?;
+        let message = format!("Command not allowed: {cmd}\n");
+        session.write_stderr_str(&message).await?;
 
         session.exit(1)
     }

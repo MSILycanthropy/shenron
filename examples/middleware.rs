@@ -5,7 +5,7 @@ use shenron::{
     middleware::builtins::{Comment, elapsed},
 };
 
-async fn sleep_and_die(session: Session) -> Result<Session> {
+async fn sleep_and_die(session: &mut Session) -> Result {
     session.write_str("Welcome to Shenron!\r\n").await?;
 
     sleep(Duration::from_secs(1));

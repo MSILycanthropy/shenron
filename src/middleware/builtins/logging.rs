@@ -8,7 +8,7 @@ use crate::{Next, Session, SessionKind};
 ///
 /// Returns `err` if
 ///   - The next middleware in the chain returns `Err`
-pub async fn logging(session: Session, next: Next) -> crate::Result<Session> {
+pub async fn logging(session: &mut Session, next: Next<'_>) -> crate::Result {
     let user = session.user().to_owned();
     let remote = session.remote_addr();
     let kind = match session.kind() {
@@ -32,7 +32,7 @@ pub async fn logging(session: Session, next: Next) -> crate::Result<Session> {
     let elapsed = start.elapsed();
 
     match &result {
-        Ok(session) => {
+        Ok(()) => {
             let exit_code = session.exit_code().unwrap_or(0);
             info!(
                 user = %user,

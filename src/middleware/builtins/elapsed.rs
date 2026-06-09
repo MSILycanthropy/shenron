@@ -7,12 +7,12 @@ use crate::{Next, Session};
 /// Returns `err` if
 ///   - The next middleware in the chain returns `Err`
 ///   - Writing to the session fails
-pub async fn elapsed(session: Session, next: Next) -> crate::Result<Session> {
+pub async fn elapsed(session: &mut Session, next: Next<'_>) -> crate::Result {
     let start = std::time::Instant::now();
-    let session = next.run(session).await?;
+    next.run(session).await?;
     session
         .write_str(&format!("Session lasted: {:?}\r\n", start.elapsed()))
         .await?;
 
-    Ok(session)
+    Ok(())
 }

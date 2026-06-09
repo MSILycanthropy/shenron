@@ -6,7 +6,7 @@ async fn main() -> shenron::Result<()> {
     Server::new().bind("0.0.0.0:2222").app(app).serve().await
 }
 
-async fn app(session: Session) -> shenron::Result<Session> {
+async fn app(session: &mut Session) -> shenron::Result {
     if let SessionKind::Exec { command } = session.kind() {
         let output = match command.trim() {
             "whoami" => format!("{}\n", session.user()),

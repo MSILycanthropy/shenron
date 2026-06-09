@@ -1,6 +1,6 @@
 use shenron::{Event, Result, Server, Session, Signal};
 
-async fn signal(mut session: Session) -> shenron::Result<Session> {
+async fn signal(session: &mut Session) -> shenron::Result {
     session
         .write_str("Running... (send SIGINT to stop)\r\n")
         .await?;

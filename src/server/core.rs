@@ -9,9 +9,9 @@ use russh::{
 };
 
 use crate::{
-    Handler, Middleware,
+    Middleware, Session,
     auth::AuthConfig,
-    middleware::{self, ErasedHandler, ErasedMiddleware},
+    middleware::{self, ErasedMiddleware},
     server::ShenronServer,
 };
 
@@ -27,7 +27,6 @@ pub struct Server {
     keys: Vec<PrivateKey>,
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
     auth: AuthConfig,
-    app: Option<Arc<dyn ErasedHandler>>,
     shutdown: Option<ShutdownFuture>,
     auth_timeout: Option<Duration>,
     inactivity_timeout: Option<Duration>,
@@ -127,7 +126,7 @@ impl Server {
     /// Middleware are executed outside-in: the first middleware
     /// is the outermost (ie it sees the session first and the result last)
     #[must_use]
-    pub fn with<M: Middleware + Clone>(mut self, middleware: M) -> Self {
+    pub fn with<M: Middleware>(mut self, middleware: M) -> Self {
         self.middleware.push(Arc::new(middleware));
 
         self
@@ -197,14 +196,22 @@ impl Server {
         self
     }
 
-    /// Set the application handler
+    /// Add a terminal application as the innermost layer.
+    ///
+    /// Sugar for [`with(terminal(app))`](Self::with): the app is just a
+    /// middleware that ignores the rest of the chain.
+    ///
+    /// Add it last. Middleware registered *before* it still run their
+    /// after-`next` work as the chain unwinds (e.g. `elapsed`, `Comment`);
+    /// middleware registered *after* it nest inside the app and never run,
+    /// since the app ignores `next`.
     #[must_use]
-    pub fn app<H: Handler>(mut self, handler: H) -> Self {
-        let chain = middleware::build_chain(handler, std::mem::take(&mut self.middleware));
-
-        self.app = Some(chain);
-
-        self
+    pub fn app<F>(self, app: F) -> Self
+    where
+        F: AsyncFn(&mut Session) -> crate::Result + Send + Sync + 'static,
+        for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+    {
+        self.with(middleware::terminal(app))
     }
 
     /// Set a graceful shutdown signal
@@ -215,13 +222,16 @@ impl Server {
     ///
     /// ```no_run
     /// # use shenron::{Server, Session};
+    /// # async fn app(session: &mut Session) -> shenron::Result {
+    /// #     session.exit(0)
+    /// # }
     /// # async fn run() -> shenron::Result<()> {
     /// Server::new()
     ///     .bind("127.0.0.1:2222")
     ///     .shutdown_signal(async {
     ///         tokio::signal::ctrl_c().await.ok();
     ///     })
-    ///     .app(|session: Session| async move { session.exit(0) })
+    ///     .app(app)
     ///     .serve()
     ///     .await
     /// # }
@@ -254,9 +264,7 @@ impl Server {
             .addr
             .ok_or_else(|| crate::Error::Config("No bind address specified".into()))?;
 
-        let handler = self
-            .app
-            .ok_or_else(|| crate::Error::Config("No app handler specified".into()))?;
+        let handler = middleware::build_chain(std::mem::take(&mut self.middleware));
 
         let auth = Arc::new(self.auth);
         let mut sh = ShenronServer {

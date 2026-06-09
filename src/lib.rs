@@ -1,6 +1,8 @@
+#![feature(async_fn_traits, unboxed_closures)]
+
 pub mod auth;
 mod error;
-mod handler;
+pub mod events;
 pub mod middleware;
 pub mod server;
 mod session;
@@ -14,8 +16,8 @@ pub use middleware::builtins::sftp;
 use std::pin::Pin;
 
 pub use error::{Error, Result};
-pub use handler::Handler;
-pub use middleware::{Middleware, Next};
+pub use events::Events;
+pub use middleware::{Middleware, Next, terminal};
 pub use server::Server;
 pub use session::{Event, PtySize, Session, SessionKind, Signal};
 

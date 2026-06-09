@@ -149,7 +149,7 @@ impl Session {
     /// # Errors
     ///
     /// Returns `Err` if the message fails to send
-    pub async fn write(&self, data: &[u8]) -> crate::Result<()> {
+    pub async fn write(&self, data: &[u8]) -> crate::Result {
         self.channel()?.data(data).await.map_err(crate::Error::Ssh)
     }
 
@@ -158,7 +158,7 @@ impl Session {
     /// # Errors
     ///
     /// Returns `Err` if the message fails to send
-    pub async fn write_str(&self, s: &str) -> crate::Result<()> {
+    pub async fn write_str(&self, s: &str) -> crate::Result {
         self.write(s.as_bytes()).await
     }
 
@@ -167,7 +167,7 @@ impl Session {
     /// # Errors
     ///
     /// Returns `Err` if the message fails to send
-    pub async fn write_stderr(&self, data: &[u8]) -> crate::Result<()> {
+    pub async fn write_stderr(&self, data: &[u8]) -> crate::Result {
         self.channel()?
             .extended_data(1, data)
             .await
@@ -179,15 +179,15 @@ impl Session {
     /// # Errors
     ///
     /// Returns `Err` if the message fails to send
-    pub async fn write_stderr_str(&self, s: &str) -> crate::Result<()> {
+    pub async fn write_stderr_str(&self, s: &str) -> crate::Result {
         self.write_stderr(s.as_bytes()).await
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub const fn exit(mut self, code: u32) -> crate::Result<Self> {
+    pub const fn exit(&mut self, code: u32) -> crate::Result {
         self.exit_code = Some(code);
 
-        Ok(self)
+        Ok(())
     }
 
     #[must_use]
@@ -203,12 +203,32 @@ impl Session {
     ///   - Setting exit status fails
     ///   - Sending the eof message fails
     ///   - Closing the channel fails
-    pub async fn abort(mut self, code: u32) -> crate::Result<Self> {
+    pub async fn abort(&mut self, code: u32) -> crate::Result {
         self.exit_code = Some(code);
 
-        self.do_exit().await?;
+        self.do_exit().await
+    }
 
-        Ok(self)
+    /// Begin an own-the-loop session: merges SSH input with application
+    /// messages pushed through [`Events::sender`](crate::events::Events::sender).
+    ///
+    /// Borrows the session; drop the returned [`Events`](crate::events::Events)
+    /// to use the session again.
+    pub fn events<M>(&mut self) -> crate::events::Events<'_, M> {
+        crate::events::Events::new(self)
+    }
+
+    /// Begin a terminal UI session driven by `ratatui`.
+    ///
+    /// Borrows the session; drop the returned [`Tui`](crate::tui::Tui) (via
+    /// [`close`](crate::tui::Tui::close)) to use the session again.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the client did not request a PTY.
+    #[cfg(feature = "ratatui")]
+    pub fn tui<M>(&mut self) -> crate::Result<crate::tui::Tui<'_, M>> {
+        crate::tui::Tui::new(self)
     }
 
     #[must_use]
@@ -236,7 +256,7 @@ impl Session {
         self.channel.take()
     }
 
-    pub(crate) async fn do_exit(&mut self) -> crate::Result<()> {
+    pub(crate) async fn do_exit(&mut self) -> crate::Result {
         if self.exited {
             return Ok(());
         }

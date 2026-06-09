@@ -1,40 +1,76 @@
+use std::ops::AsyncFnMut;
+
 use crate::{Next, Result, Session};
 
-/// A middleware that can wrap a handler.
+/// A middleware that borrows the session and can act before and after the rest
+/// of the chain.
 ///
-/// Middleware can perform actions before and after the inner handler,
-/// modify the session, short-circuit the chain, etc.
+/// The server owns the [`Session`] and lends each layer a `&mut Session`. A
+/// middleware does its before-work, calls [`Next::run`] (re-lending the borrow
+/// down the chain), then its after-work — still holding its `&mut`.
+///
+/// Implemented automatically for any `async` function or closure with the
+/// signature `Fn(&mut Session, Next) -> Result`.
 ///
 /// # Example
 ///
 /// ```
-/// use shenron::{Middleware, Next, Result, Session};
+/// use shenron::{Next, Result, Session};
 ///
-/// #[derive(Clone)]
-/// struct LoggingMiddleware;
-///
-/// impl Middleware for LoggingMiddleware {
-///     async fn handle(&self, session: Session, next: Next) -> Result<Session> {
-///         let user = session.user().to_owned();
-///         tracing::info!("{} connected", user);
-///
-///         let result = next.run(session).await;
-///
-///         tracing::info!("{} disconnected", user);
-///         result
-///     }
+/// async fn logging(session: &mut Session, next: Next<'_>) -> Result {
+///     tracing::info!("{} connected", session.user());
+///     next.run(session).await?;
+///     tracing::info!("disconnected");
+///     Ok(())
 /// }
 /// ```
-pub trait Middleware: Send + Sync + Clone + 'static {
-    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<Session>> + Send;
+pub trait Middleware: Send + Sync + 'static {
+    fn handle<'a>(
+        &'a self,
+        session: &'a mut Session,
+        next: Next<'a>,
+    ) -> impl Future<Output = Result> + Send + 'a;
 }
 
-impl<F, Fut> Middleware for F
+impl<F> Middleware for F
 where
-    F: Fn(Session, Next) -> Fut + Send + Sync + Clone + 'static,
-    Fut: Future<Output = Result<Session>> + Send,
+    F: AsyncFn(&mut Session, Next<'_>) -> Result + Send + Sync + 'static,
+    for<'a> <F as AsyncFnMut<(&'a mut Session, Next<'a>)>>::CallRefFuture<'a>: Send,
 {
-    fn handle(&self, session: Session, next: Next) -> impl Future<Output = Result<Session>> + Send {
-        (self)(session, next)
+    fn handle<'a>(
+        &'a self,
+        session: &'a mut Session,
+        next: Next<'a>,
+    ) -> impl Future<Output = Result> + Send + 'a {
+        self(session, next)
+    }
+}
+
+/// A terminal app adapted as middleware: it borrows the session, ignores
+/// `next`, and is therefore always the innermost layer. Build it with
+/// [`terminal`].
+pub struct Terminal<F>(F);
+
+/// Adapt a terminal app `Fn(&mut Session) -> Result` into a [`Middleware`]
+/// that ignores the rest of the chain.
+pub const fn terminal<F>(f: F) -> Terminal<F>
+where
+    F: AsyncFn(&mut Session) -> Result + Send + Sync + 'static,
+    for<'a> <F as AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+{
+    Terminal(f)
+}
+
+impl<F> Middleware for Terminal<F>
+where
+    F: AsyncFn(&mut Session) -> Result + Send + Sync + 'static,
+    for<'a> <F as AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+{
+    fn handle<'a>(
+        &'a self,
+        session: &'a mut Session,
+        _next: Next<'a>,
+    ) -> impl Future<Output = Result> + Send + 'a {
+        (self.0)(session)
     }
 }

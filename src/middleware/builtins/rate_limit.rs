@@ -49,12 +49,12 @@ impl RateLimiter {
     /// Create a rate limiter that allows `count` connections per minute per IP
     #[must_use]
     pub fn per_minute(count: u32) -> Self {
-        Self::new(count, std::time::Duration::from_secs(60))
+        Self::new(count, std::time::Duration::from_mins(1))
     }
 }
 
 impl Middleware for RateLimiter {
-    async fn handle(&self, session: Session, next: Next) -> Result<Session> {
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
         let key = session.remote_addr().ip().to_string();
 
         if self.limiter.check_key(&key).is_err() {

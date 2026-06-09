@@ -258,10 +258,10 @@ impl russh::server::Handler for ShenronHandler {
     }
 }
 
-fn run_handler(handler: Arc<dyn ErasedHandler>, session: Session) {
+fn run_handler(handler: Arc<dyn ErasedHandler>, mut session: Session) {
     tokio::spawn(async move {
-        match handler.call(session).await {
-            Ok(mut session) => {
+        match handler.call(&mut session).await {
+            Ok(()) => {
                 let _ = session.do_exit().await;
             }
             Err(e) => {

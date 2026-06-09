@@ -1,6 +1,6 @@
 use shenron::{Event, Next, Result, Server, Session};
 
-async fn echo(mut session: Session) -> Result<Session> {
+async fn echo(session: &mut Session) -> Result {
     session.write_str("Welcome to Shenron!\r\n").await?;
     session
         .write_str(&format!("Hello, {}!\r\n", session.user()))
@@ -34,7 +34,7 @@ async fn echo(mut session: Session) -> Result<Session> {
     session.exit(0)
 }
 
-async fn log(session: Session, next: Next) -> Result<Session> {
+async fn log(session: &mut Session, next: Next<'_>) -> Result {
     tracing::info!(
         "{} connected from {}",
         session.user(),
