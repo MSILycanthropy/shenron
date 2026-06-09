@@ -150,7 +150,8 @@ impl Server {
     pub fn password_auth<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(String, String) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = bool> + Send + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Into<crate::Auth>,
     {
         self.auth.password = Some(Arc::new(handler));
 
@@ -175,7 +176,8 @@ impl Server {
     pub fn pubkey_auth<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(String, PublicKey) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = bool> + Send + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Into<crate::Auth>,
     {
         self.auth.pubkey = Some(Arc::new(handler));
 

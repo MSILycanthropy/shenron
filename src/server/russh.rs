@@ -6,7 +6,10 @@ use russh::{
     server::{Auth, Msg, Session as RusshSession},
 };
 
-use crate::{PtySize, Session, SessionKind, auth::AuthConfig, middleware::ErasedHandler};
+use crate::{
+    Auth as AuthOutcome, Extensions, PtySize, Session, SessionKind, auth::AuthConfig,
+    middleware::ErasedHandler,
+};
 
 pub(crate) struct ShenronServer {
     pub(crate) handler: Arc<dyn ErasedHandler>,
@@ -26,6 +29,7 @@ impl russh::server::Server for ShenronServer {
             public_key: None,
             auth: Arc::clone(&self.auth),
             env: HashMap::new(),
+            extensions: Extensions::default(),
             pty: None,
             banner: self.banner.clone(),
         }
@@ -40,6 +44,7 @@ pub(crate) struct ShenronHandler {
     public_key: Option<PublicKey>,
     auth: Arc<AuthConfig>,
     env: HashMap<String, String>,
+    extensions: Extensions,
     pty: Option<(String, PtySize)>,
     banner: Option<String>,
 }
@@ -85,14 +90,17 @@ impl russh::server::Handler for ShenronHandler {
     }
 
     async fn auth_publickey(&mut self, user: &str, public_key: &PublicKey) -> crate::Result<Auth> {
-        let accepted = if let Some(ref handler) = self.auth.pubkey {
+        let outcome: AuthOutcome = if let Some(ref handler) = self.auth.pubkey {
             handler.verify(user, public_key).await
         } else {
-            self.auth.is_empty()
+            self.auth.is_empty().into()
         };
+
+        let accepted = outcome.accepted();
 
         if accepted {
             self.public_key = Some(public_key.clone());
+            self.extensions.merge(outcome.into_extensions());
         }
 
         Ok(self.finish_auth(user, accepted))
@@ -103,11 +111,17 @@ impl russh::server::Handler for ShenronHandler {
         user: &str,
         password: &str,
     ) -> crate::Result<russh::server::Auth> {
-        let accepted = if let Some(ref handler) = self.auth.password {
+        let outcome: AuthOutcome = if let Some(ref handler) = self.auth.password {
             handler.verify(user, password).await
         } else {
-            self.auth.is_empty()
+            self.auth.is_empty().into()
         };
+
+        let accepted = outcome.accepted();
+
+        if accepted {
+            self.extensions.merge(outcome.into_extensions());
+        }
 
         Ok(self.finish_auth(user, accepted))
     }
@@ -151,6 +165,7 @@ impl russh::server::Handler for ShenronHandler {
             user,
             self.public_key.clone(),
             std::mem::take(&mut self.env),
+            std::mem::take(&mut self.extensions),
             self.remote_addr,
         );
 
@@ -212,6 +227,7 @@ impl russh::server::Handler for ShenronHandler {
             user,
             self.public_key.clone(),
             std::mem::take(&mut self.env),
+            std::mem::take(&mut self.extensions),
             self.remote_addr,
         );
 
@@ -245,6 +261,7 @@ impl russh::server::Handler for ShenronHandler {
             user,
             self.public_key.clone(),
             std::mem::take(&mut self.env),
+            std::mem::take(&mut self.extensions),
             self.remote_addr,
         );
 

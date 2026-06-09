@@ -15,10 +15,11 @@ pub use middleware::builtins::sftp;
 
 use std::pin::Pin;
 
+pub use auth::Auth;
 pub use error::{Error, Result};
 pub use events::Events;
 pub use middleware::{Middleware, Next, terminal};
 pub use server::Server;
-pub use session::{Event, PtySize, Session, SessionKind, Signal};
+pub use session::{Event, Extensions, PtySize, Session, SessionKind, Signal};
 
 pub(crate) type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

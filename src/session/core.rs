@@ -1,8 +1,8 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{any::Any, collections::HashMap, net::SocketAddr};
 
 use russh::{Channel, ChannelMsg, keys::PublicKey, server::Msg};
 
-use crate::{Event, PtySize, SessionKind};
+use crate::{Event, Extensions, PtySize, SessionKind};
 
 pub struct Session {
     channel: Option<Channel<Msg>>,
@@ -10,6 +10,7 @@ pub struct Session {
     user: String,
     public_key: Option<PublicKey>,
     env: HashMap<String, String>,
+    extensions: Extensions,
     remote_addr: SocketAddr,
     exit_code: Option<u32>,
     exited: bool,
@@ -22,6 +23,7 @@ impl Session {
         user: String,
         public_key: Option<PublicKey>,
         env: HashMap<String, String>,
+        extensions: Extensions,
         remote_addr: SocketAddr,
     ) -> Self {
         Self {
@@ -30,6 +32,7 @@ impl Session {
             user,
             public_key,
             env,
+            extensions,
             remote_addr,
             exit_code: None,
             exited: false,
@@ -142,6 +145,20 @@ impl Session {
     #[must_use]
     pub const fn env(&self) -> &HashMap<String, String> {
         &self.env
+    }
+
+    /// Borrow a typed value attached during auth or by a middleware.
+    ///
+    /// Returns `None` if nothing of type `T` was stored. See
+    /// [`Auth::with`](crate::Auth::with) and [`insert`](Self::insert).
+    #[must_use]
+    pub fn get<T: Any>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
+    }
+
+    /// Attach a typed value, replacing any existing value of the same type.
+    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
+        self.extensions.insert(value);
     }
 
     /// Write data to the channel
