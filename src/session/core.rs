@@ -211,6 +211,12 @@ impl Session {
         self.write_stderr(s.as_bytes()).await
     }
 
+    /// Record a non-zero exit code to report when the handler returns.
+    ///
+    /// Calling this is only needed for failure codes: a handler returning
+    /// `Ok(())` reports exit 0, and a handler returning `Err` reports exit 1.
+    /// Returns an always-`Ok` `Result` so middleware can `return session.exit(1)`.
+    /// To close the channel immediately instead, use [`abort`](Self::abort).
     #[allow(clippy::missing_errors_doc)]
     pub const fn exit(&mut self, code: u32) -> crate::Result {
         self.exit_code = Some(code);
@@ -234,7 +240,7 @@ impl Session {
     pub async fn abort(&mut self, code: u32) -> crate::Result {
         self.exit_code = Some(code);
 
-        self.do_exit().await
+        self.finish(code).await
     }
 
     /// Begin an own-the-loop session: merges SSH input with application
@@ -284,14 +290,13 @@ impl Session {
         self.channel.take()
     }
 
-    pub(crate) async fn do_exit(&mut self) -> crate::Result {
+    /// Send the exit status, EOF, and close the channel. Idempotent — once a
+    /// session has finished, later calls (and a later natural handler return)
+    /// no-op.
+    pub(crate) async fn finish(&mut self, code: u32) -> crate::Result {
         if self.exited {
             return Ok(());
         }
-
-        let Some(exit_code) = self.exit_code else {
-            return Ok(());
-        };
 
         let Some(channel) = self.channel.as_ref() else {
             return Ok(());
@@ -299,7 +304,7 @@ impl Session {
 
         self.exited = true;
 
-        channel.exit_status(exit_code).await?;
+        channel.exit_status(code).await?;
         channel.eof().await?;
         channel.close().await.map_err(crate::Error::Ssh)
     }

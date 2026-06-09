@@ -51,6 +51,24 @@ impl russh::server::Server for ShenronServer {
     }
 }
 
+/// Holds a slot in the connection's session count; releases it on drop, so
+/// the count stays correct even if the handler task panics.
+struct RunningGuard(Arc<AtomicUsize>);
+
+impl RunningGuard {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+
+        Self(count)
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// A session channel that has been opened but not yet started: `env` and
 /// `pty-req` requests accumulate here until shell/exec/subsystem arrives.
 struct PendingChannel {
@@ -109,21 +127,23 @@ impl ShenronHandler {
 
     fn run_handler(&self, mut session: Session) {
         let handler = Arc::clone(&self.handler);
-        let running = Arc::clone(&self.running);
-
-        running.fetch_add(1, Ordering::Relaxed);
+        let running = RunningGuard::new(Arc::clone(&self.running));
 
         tokio::spawn(async move {
-            match handler.call(&mut session).await {
-                Ok(()) => {
-                    let _ = session.do_exit().await;
-                }
-                Err(e) => {
-                    tracing::error!("Handler error: {}", e);
-                }
-            }
+            let _running = running;
 
-            running.fetch_sub(1, Ordering::Relaxed);
+            let code = match handler.call(&mut session).await {
+                Ok(()) => session.exit_code().unwrap_or(0),
+                Err(e) => {
+                    tracing::error!("Handler error: {e}");
+
+                    1
+                }
+            };
+
+            if let Err(e) = session.finish(code).await {
+                tracing::debug!("failed to close session channel: {e}");
+            }
         });
     }
 }
