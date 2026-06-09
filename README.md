@@ -55,19 +55,175 @@ Server::new()
     .await
 ```
 
-When no host key is configured, Shenron generates an Ed25519 key, writes it to
-`id_ed25519` (and `id_ed25519.pub`) in the working directory, and reuses it on
-the next start — so the server keeps a stable identity across restarts. To pick
-the location yourself, use `host_key_path`, which loads the key if it exists and
-generates one if it doesn't:
+## Authentication
+
+By default Shenron accepts every connection — handy for public apps and local
+development. To decide who gets in, add a password and/or public-key handler.
+Each returns whether to accept the connection.
 
 ```rust
 Server::new()
     .bind("0.0.0.0:2222")
-    .host_key_path("host_key")?
+    .password_auth(|user, password| async move {
+        user == "admin" && password == "swordfish"
+    })
     .app(my_app)
     .serve()
     .await
+```
+
+Public-key auth receives the client's key instead of a password:
+
+```rust
+use russh::keys::HashAlg;
+
+Server::new()
+    .bind("0.0.0.0:2222")
+    .pubkey_auth(|user, key| async move {
+        key.fingerprint(HashAlg::Sha256).to_string() == "SHA256:abc123..."
+    })
+    .app(my_app)
+    .serve()
+    .await
+```
+
+A handler can return a plain `bool`, or an `Auth` outcome that also attaches
+typed data to the session — handy for passing the looked-up account straight to
+your app:
+
+```rust
+use shenron::Auth;
+
+struct Account { id: u32 }
+
+Server::new()
+    .password_auth(|user, password| async move {
+        match lookup(&user, &password).await {
+            Some(account) => Auth::accept().with(account),
+            None => Auth::reject(),
+        }
+    })
+    .app(my_app)
+```
+
+Your app reads it back with `session.get::<Account>()` (see
+[Working with Sessions](#working-with-sessions)).
+
+## Host keys
+
+A host key is the server's stable cryptographic identity — it's what lets
+clients detect they're still talking to the same server across restarts (the
+`known_hosts` check).
+
+When no host key is configured, Shenron generates an Ed25519 key, writes it to
+`id_ed25519` (and `id_ed25519.pub`) in the working directory, and reuses it on
+the next start. To pick the location yourself, use `host_key_path`, which loads
+the key if it exists and generates one if it doesn't:
+
+```rust
+Server::new()
+    .host_key_path("host_key")?
+    .app(my_app)
+```
+
+To choose the algorithm of a generated key, or encrypt it with a passphrase,
+pass `HostKeyOptions`:
+
+```rust
+use shenron::{Algorithm, EcdsaCurve, HostKeyOptions};
+
+Server::new()
+    .host_key_path_with(
+        "host_key",
+        HostKeyOptions::new(Algorithm::Ecdsa { curve: EcdsaCurve::NistP384 })
+            .passphrase("correct horse battery staple"),
+    )?
+    .app(my_app)
+```
+
+The passphrase encrypts the key on disk; the running server uses it unencrypted.
+Supported algorithms are Ed25519, ECDSA (P-256/P-384/P-521), and RSA (4096-bit).
+You can also load an existing key in other ways:
+
+```rust
+// Passphrase-encrypted key from a file
+.host_key_file_with("host_key", "correct horse battery staple")?
+
+// Raw PEM bytes (e.g. embedded, or pulled from a secret store)
+.host_key_pem(include_bytes!("host_key"))?
+.host_key_pem_with(pem_bytes, "passphrase")?
+```
+
+Add more than one host key and the server offers all of them — the client picks
+which to use following the standard SSH host-key preference order. You don't
+pick the negotiated algorithm; you pick which keys are available.
+
+## Working with Sessions
+
+Your app and middleware receive a `Session`. Beyond I/O it exposes who connected
+and a typed store for carrying data along the chain.
+
+```rust
+async fn my_app(mut session: Session) -> shenron::Result<Session> {
+    let _user = session.user();
+    let _addr = session.remote_addr();
+
+    // The public key the client authenticated with, if any
+    if let Some(_key) = session.public_key() {
+        // ...
+    }
+
+    session.write_str("Hello!\r\n").await?;
+    session.exit(0)
+}
+```
+
+**Context store.** Each session carries a typed key-value store. Auth handlers
+stash data with `Auth::with`; middleware and your app read and write it with
+`get` / `insert`:
+
+```rust
+struct Account { id: u32 }
+
+async fn my_app(mut session: Session) -> shenron::Result<Session> {
+    if let Some(account) = session.get::<Account>() {
+        let msg = format!("Welcome back, #{}\r\n", account.id);
+        session.write_str(&msg).await?;
+    }
+    session.exit(0)
+}
+```
+
+Some commonly used session methods:
+
+- `user()` / `remote_addr()` / `public_key()` — connection identity
+- `kind()`, `command()`, `pty()`, `term()` — what the client requested
+- `write_str` / `write` / `write_stderr_str` — output
+- `get::<T>()` / `insert::<T>(value)` — the context store
+- `exit(code)` — finish the session
+
+## Server configuration
+
+Show a banner before authentication:
+
+```rust
+Server::new()
+    .banner("Authorized users only.\r\n")  // or .banner_file("banner.txt")?
+    .app(my_app)
+```
+
+Cap how long authentication and idle connections last, and detect dead peers
+with keepalives:
+
+```rust
+use std::time::Duration;
+
+Server::new()
+    .auth_timeout(Duration::from_secs(30))        // time allowed to authenticate
+    .inactivity_timeout(Duration::from_secs(600)) // drop idle sessions
+    .keepalive_interval(Duration::from_secs(15))  // ping the client
+    .keepalive_max(3)                             // give up after N missed pings
+    .app(my_app)
 ```
 
 ## Examples

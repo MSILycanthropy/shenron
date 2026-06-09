@@ -1,10 +1,7 @@
 use std::{path::Path, pin::Pin, sync::Arc, time::Duration};
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use russh::{
-    keys::{Algorithm, PrivateKey, PublicKey, ssh_key::LineEnding},
+    keys::{PrivateKey, PublicKey},
     server::{Config, Server as _},
 };
 
@@ -12,7 +9,7 @@ use crate::{
     Middleware, Session,
     auth::AuthConfig,
     middleware::{self, ErasedMiddleware},
-    server::ShenronServer,
+    server::{ShenronServer, keygen, keygen::HostKeyOptions},
 };
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -81,11 +78,70 @@ impl Server {
     pub fn host_key_path(self, path: impl AsRef<Path>) -> crate::Result<Self> {
         let path = path.as_ref();
 
-        let key = if path.exists() {
-            russh::keys::load_secret_key(path, None)?
-        } else {
-            generate_and_persist(path)?
-        };
+        let key = keygen::load_or_generate(path, HostKeyOptions::default())?;
+
+        Ok(self.host_key(key))
+    }
+
+    /// Add a host key from a path, controlling the generated key's algorithm
+    /// and (optionally) encrypting it with a passphrase
+    ///
+    /// Behaves like [`host_key_path`](Self::host_key_path): an existing key is
+    /// loaded (using the passphrase to decrypt if set), otherwise a new key of
+    /// the chosen algorithm is generated and persisted. Each added key makes
+    /// its algorithm available for negotiation; the client picks per the SSH
+    /// host-key preference order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the key cannot be loaded, generated, or written
+    pub fn host_key_path_with(
+        self,
+        path: impl AsRef<Path>,
+        options: HostKeyOptions,
+    ) -> crate::Result<Self> {
+        let key = keygen::load_or_generate(path.as_ref(), options)?;
+
+        Ok(self.host_key(key))
+    }
+
+    /// Add a passphrase-encrypted host key from a file
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the key cannot be loaded or decrypted
+    pub fn host_key_file_with(
+        self,
+        path: impl AsRef<Path>,
+        passphrase: impl AsRef<str>,
+    ) -> crate::Result<Self> {
+        let key = russh::keys::load_secret_key(path, Some(passphrase.as_ref()))?;
+
+        Ok(self.host_key(key))
+    }
+
+    /// Add a host key from raw OpenSSH/PEM bytes (Wish `WithHostKeyPEM`)
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the bytes cannot be decoded into a private key
+    pub fn host_key_pem(self, pem: impl AsRef<[u8]>) -> crate::Result<Self> {
+        let key = keygen::from_pem(pem.as_ref(), None)?;
+
+        Ok(self.host_key(key))
+    }
+
+    /// Add a passphrase-encrypted host key from raw OpenSSH/PEM bytes
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the bytes cannot be decoded or decrypted
+    pub fn host_key_pem_with(
+        self,
+        pem: impl AsRef<[u8]>,
+        passphrase: impl AsRef<str>,
+    ) -> crate::Result<Self> {
+        let key = keygen::from_pem(pem.as_ref(), Some(passphrase.as_ref()))?;
 
         Ok(self.host_key(key))
     }
@@ -320,31 +376,4 @@ impl Server {
 
         Arc::new(config)
     }
-}
-
-/// Generate a fresh Ed25519 host key, write it to `path` (and its public half
-/// to `<path>.pub`), and return it. Private key is `0o600`, parent dir `0o700`.
-fn generate_and_persist(path: &Path) -> crate::Result<PrivateKey> {
-    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
-
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-    }
-
-    key.write_openssh_file(path, LineEnding::LF)?;
-    #[cfg(unix)]
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-
-    // Wish writes `<path>.pub`; append rather than replace any extension.
-    let mut pub_path = path.as_os_str().to_owned();
-    pub_path.push(".pub");
-    key.public_key().write_openssh_file(Path::new(&pub_path))?;
-
-    tracing::info!("Generated host key at {}", path.display());
-
-    Ok(key)
 }
