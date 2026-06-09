@@ -3,27 +3,49 @@ use std::{
     collections::HashMap,
 };
 
-/// A type-keyed bag of values scoped to a single connection.
+/// A type-keyed bag of values attached to a connection and snapshotted into
+/// each session.
 ///
 /// Holds one value per concrete type. Auth handlers and middleware stash typed
 /// data here; the handler reads it back with [`get`](Self::get). Values must be
-/// `Send + Sync + 'static` since they cross into the spawned session task.
+/// `Clone + Send + Sync + 'static`: every session on a connection gets its own
+/// clone, so mutations never leak across sessions. Wrap non-`Clone` data (or
+/// data sessions should genuinely share) in an `Arc`.
 ///
 /// Use a newtype (`struct RequestId(String)`) rather than a bare `String` so
 /// distinct values don't collide on the same `TypeId`.
-#[derive(Default)]
-pub struct Extensions(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
+#[derive(Default, Clone)]
+pub struct Extensions(HashMap<TypeId, Box<dyn CloneAny>>);
+
+/// Object-safe `Any + Clone`. `DynClone` makes `Box<dyn CloneAny>: Clone`;
+/// `as_any` recovers `&dyn Any` for downcasting, which a subtrait of `Any`
+/// can't do directly.
+trait CloneAny: dyn_clone::DynClone + Send + Sync + 'static {
+    fn as_any(&self) -> &dyn Any;
+}
+
+dyn_clone::clone_trait_object!(CloneAny);
+
+impl<T: Any + Clone + Send + Sync> CloneAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 impl Extensions {
     /// Store a value, replacing any existing value of the same type.
-    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
+    pub fn insert<T: Any + Clone + Send + Sync>(&mut self, value: T) {
         self.0.insert(TypeId::of::<T>(), Box::new(value));
     }
 
     /// Borrow the stored value of type `T`, if present.
     #[must_use]
     pub fn get<T: Any>(&self) -> Option<&T> {
-        self.0.get(&TypeId::of::<T>())?.downcast_ref::<T>()
+        // Deref past the Box: the blanket impl covers `Box<dyn CloneAny>`
+        // itself, so `.as_any()` on the box would downcast to the box type.
+        let boxed = self.0.get(&TypeId::of::<T>())?;
+
+        (**boxed).as_any().downcast_ref::<T>()
     }
 
     /// Fold `other` into `self`; on type collisions `other` wins.
@@ -36,10 +58,10 @@ impl Extensions {
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     struct Account(u32);
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     struct RequestId(String);
 
     #[test]
@@ -74,6 +96,18 @@ mod tests {
 
         assert_eq!(ext.get::<Account>(), Some(&Account(9)));
         assert_eq!(ext.get::<RequestId>(), Some(&RequestId("abc".into())));
+    }
+
+    #[test]
+    fn clones_are_independent() {
+        let mut original = Extensions::default();
+        original.insert(Account(1));
+
+        let mut snapshot = original.clone();
+        snapshot.insert(Account(2));
+
+        assert_eq!(original.get::<Account>(), Some(&Account(1)));
+        assert_eq!(snapshot.get::<Account>(), Some(&Account(2)));
     }
 
     #[test]

@@ -11,6 +11,7 @@ struct Account {
 
 /// Inserted by middleware. A newtype so it can't collide with another stored
 /// `String` on the same `TypeId`.
+#[derive(Clone)]
 struct RequestId(String);
 
 static REQUESTS: AtomicU64 = AtomicU64::new(0);

@@ -24,7 +24,7 @@ async fn main() -> shenron::Result<()> {
 
 async fn app(session: &mut Session) -> shenron::Result {
     match session.kind() {
-        SessionKind::Pty { .. } | SessionKind::Shell => {
+        SessionKind::Shell => {
             session
                 .write_str("Connected! Server may shut down at any time.\r\n")
                 .await?;

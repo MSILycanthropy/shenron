@@ -11,6 +11,7 @@ use crate::Extensions;
 ///
 /// ```
 /// # use shenron::Auth;
+/// #[derive(Clone)]
 /// struct Account { id: u32 }
 /// let _ = Auth::accept().with(Account { id: 7 });
 /// ```
@@ -40,7 +41,7 @@ impl Auth {
     /// [`Session::get`](crate::Session::get). No effect on a rejected outcome —
     /// rejected data is dropped.
     #[must_use]
-    pub fn with<T: Any + Send + Sync>(mut self, value: T) -> Self {
+    pub fn with<T: Any + Clone + Send + Sync>(mut self, value: T) -> Self {
         self.extensions.insert(value);
         self
     }
@@ -64,6 +65,7 @@ impl From<bool> for Auth {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct Account(u32);
 
     #[test]

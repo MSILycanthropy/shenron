@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use tracing::{error, info};
 
 use crate::{Next, Session, SessionKind};
@@ -11,14 +13,15 @@ use crate::{Next, Session, SessionKind};
 pub async fn logging(session: &mut Session, next: Next<'_>) -> crate::Result {
     let user = session.user().to_owned();
     let remote = session.remote_addr();
-    let kind = match session.kind() {
-        SessionKind::Pty { term, size } => {
-            format!("pty(term={}, size={}x{})", term, size.width, size.height)
-        }
+    let mut kind = match session.kind() {
         SessionKind::Exec { command } => format!("exec({command})"),
         SessionKind::Shell => "shell".to_string(),
         SessionKind::Subsystem { name } => format!("subsystem({name})"),
     };
+
+    if let Some((term, size)) = session.pty() {
+        let _ = write!(kind, " pty(term={}, size={}x{})", term, size.width, size.height);
+    }
 
     info!(
         user = %user,

@@ -1,7 +1,14 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use russh::{
-    Channel,
+    Channel, ChannelId,
     keys::PublicKey,
     server::{Auth, Msg, Session as RusshSession},
 };
@@ -10,6 +17,15 @@ use crate::{
     Auth as AuthOutcome, Extensions, PtySize, Session, SessionKind, auth::AuthConfig,
     middleware::ErasedHandler,
 };
+
+/// Concurrent session channels allowed per connection (pending + running).
+/// Matches OpenSSH's `MaxSessions` default.
+const MAX_SESSIONS: usize = 10;
+
+/// Client-controlled env vars are stored per channel; cap them so a hostile
+/// client can't grow memory without bound. Requests beyond the cap are
+/// silently dropped, like OpenSSH's `AcceptEnv` rejections.
+const MAX_ENV_VARS: usize = 128;
 
 pub(crate) struct ShenronServer {
     pub(crate) handler: Arc<dyn ErasedHandler>,
@@ -24,28 +40,34 @@ impl russh::server::Server for ShenronServer {
         ShenronHandler {
             handler: Arc::clone(&self.handler),
             remote_addr: addr.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
-            channel: None,
+            pending: HashMap::new(),
+            running: Arc::new(AtomicUsize::new(0)),
             user: None,
             public_key: None,
             auth: Arc::clone(&self.auth),
-            env: HashMap::new(),
             extensions: Extensions::default(),
-            pty: None,
             banner: self.banner.clone(),
         }
     }
 }
 
+/// A session channel that has been opened but not yet started: `env` and
+/// `pty-req` requests accumulate here until shell/exec/subsystem arrives.
+struct PendingChannel {
+    channel: Channel<Msg>,
+    env: HashMap<String, String>,
+    pty: Option<(String, PtySize)>,
+}
+
 pub(crate) struct ShenronHandler {
     handler: Arc<dyn ErasedHandler>,
     remote_addr: SocketAddr,
-    channel: Option<Channel<Msg>>,
+    pending: HashMap<ChannelId, PendingChannel>,
+    running: Arc<AtomicUsize>,
     user: Option<String>,
     public_key: Option<PublicKey>,
     auth: Arc<AuthConfig>,
-    env: HashMap<String, String>,
     extensions: Extensions,
-    pty: Option<(String, PtySize)>,
     banner: Option<String>,
 }
 
@@ -64,6 +86,46 @@ impl ShenronHandler {
             partial_success: false,
         }
     }
+
+    /// Pull the pending channel for `id` and build the app session from its
+    /// accumulated state plus a snapshot of the connection's auth data.
+    fn start_session(&mut self, id: ChannelId, kind: SessionKind) -> crate::Result<Session> {
+        let pending = self
+            .pending
+            .remove(&id)
+            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
+
+        Ok(Session::new(
+            pending.channel,
+            kind,
+            pending.pty,
+            self.user.clone().unwrap_or_else(|| "unknown".into()),
+            self.public_key.clone(),
+            pending.env,
+            self.extensions.clone(),
+            self.remote_addr,
+        ))
+    }
+
+    fn run_handler(&self, mut session: Session) {
+        let handler = Arc::clone(&self.handler);
+        let running = Arc::clone(&self.running);
+
+        running.fetch_add(1, Ordering::Relaxed);
+
+        tokio::spawn(async move {
+            match handler.call(&mut session).await {
+                Ok(()) => {
+                    let _ = session.do_exit().await;
+                }
+                Err(e) => {
+                    tracing::error!("Handler error: {}", e);
+                }
+            }
+
+            running.fetch_sub(1, Ordering::Relaxed);
+        });
+    }
 }
 
 impl russh::server::Handler for ShenronHandler {
@@ -78,15 +140,31 @@ impl russh::server::Handler for ShenronHandler {
         channel: Channel<Msg>,
         _session: &mut RusshSession,
     ) -> crate::Result<bool> {
-        // One app session per connection; reject additional channels rather
-        // than silently clobbering the first.
-        if self.channel.is_some() {
+        if self.pending.len() + self.running.load(Ordering::Relaxed) >= MAX_SESSIONS {
             return Ok(false);
         }
 
-        self.channel = Some(channel);
+        self.pending.insert(
+            channel.id(),
+            PendingChannel {
+                channel,
+                env: HashMap::new(),
+                pty: None,
+            },
+        );
 
         Ok(true)
+    }
+
+    async fn channel_close(
+        &mut self,
+        channel: ChannelId,
+        _session: &mut RusshSession,
+    ) -> crate::Result<()> {
+        // A pending channel closed without starting a session; free its slot.
+        self.pending.remove(&channel);
+
+        Ok(())
     }
 
     async fn auth_publickey(&mut self, user: &str, public_key: &PublicKey) -> crate::Result<Auth> {
@@ -128,52 +206,24 @@ impl russh::server::Handler for ShenronHandler {
 
     async fn env_request(
         &mut self,
-        _channel: russh::ChannelId,
+        channel: russh::ChannelId,
         variable_name: &str,
         variable_value: &str,
         _session: &mut RusshSession,
     ) -> crate::Result<()> {
-        self.env
-            .insert(variable_name.to_string(), variable_value.to_string());
-
-        Ok(())
-    }
-
-    async fn exec_request(
-        &mut self,
-        channel_id: russh::ChannelId,
-        data: &[u8],
-        session: &mut RusshSession,
-    ) -> crate::Result<()> {
-        let channel = self
-            .channel
-            .take()
-            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
-
-        let command = String::from_utf8_lossy(data).to_string();
-
-        let kind = match self.pty.take() {
-            Some((term, size)) => crate::SessionKind::Pty { term, size },
-            None => crate::SessionKind::Exec { command },
+        let Some(pending) = self.pending.get_mut(&channel) else {
+            return Ok(());
         };
 
-        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
+        if pending.env.len() >= MAX_ENV_VARS {
+            tracing::debug!("env var limit reached, dropping {variable_name}");
 
-        let app_session = crate::Session::new(
-            channel,
-            kind,
-            user,
-            self.public_key.clone(),
-            std::mem::take(&mut self.env),
-            std::mem::take(&mut self.extensions),
-            self.remote_addr,
-        );
+            return Ok(());
+        }
 
-        let handler = Arc::clone(&self.handler);
-
-        session.channel_success(channel_id)?;
-
-        run_handler(handler, app_session);
+        pending
+            .env
+            .insert(variable_name.to_string(), variable_value.to_string());
 
         Ok(())
     }
@@ -189,7 +239,13 @@ impl russh::server::Handler for ShenronHandler {
         _modes: &[(russh::Pty, u32)],
         session: &mut RusshSession,
     ) -> crate::Result<()> {
-        self.pty = Some((
+        let Some(pending) = self.pending.get_mut(&channel_id) else {
+            session.channel_failure(channel_id)?;
+
+            return Ok(());
+        };
+
+        pending.pty = Some((
             term.to_string(),
             PtySize {
                 width: col_width,
@@ -204,38 +260,32 @@ impl russh::server::Handler for ShenronHandler {
         Ok(())
     }
 
+    async fn exec_request(
+        &mut self,
+        channel_id: russh::ChannelId,
+        data: &[u8],
+        session: &mut RusshSession,
+    ) -> crate::Result<()> {
+        let command = String::from_utf8_lossy(data).to_string();
+        let app_session = self.start_session(channel_id, SessionKind::Exec { command })?;
+
+        session.channel_success(channel_id)?;
+
+        self.run_handler(app_session);
+
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         channel_id: russh::ChannelId,
         session: &mut RusshSession,
     ) -> crate::Result<()> {
-        let channel = self
-            .channel
-            .take()
-            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
-
-        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
-
-        let kind = match self.pty.take() {
-            Some((term, size)) => crate::SessionKind::Pty { term, size },
-            None => crate::SessionKind::Shell,
-        };
-
-        let app_session = crate::Session::new(
-            channel,
-            kind,
-            user,
-            self.public_key.clone(),
-            std::mem::take(&mut self.env),
-            std::mem::take(&mut self.extensions),
-            self.remote_addr,
-        );
-
-        let handler = Arc::clone(&self.handler);
+        let app_session = self.start_session(channel_id, SessionKind::Shell)?;
 
         session.channel_success(channel_id)?;
 
-        run_handler(handler, app_session);
+        self.run_handler(app_session);
 
         Ok(())
     }
@@ -246,44 +296,15 @@ impl russh::server::Handler for ShenronHandler {
         name: &str,
         session: &mut RusshSession,
     ) -> crate::Result<()> {
-        let channel = self
-            .channel
-            .take()
-            .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
-
-        let user = self.user.clone().unwrap_or_else(|| "unknown".into());
-
-        let app_session = crate::Session::new(
-            channel,
-            SessionKind::Subsystem {
-                name: name.to_string(),
-            },
-            user,
-            self.public_key.clone(),
-            std::mem::take(&mut self.env),
-            std::mem::take(&mut self.extensions),
-            self.remote_addr,
-        );
-
-        let handler = Arc::clone(&self.handler);
+        let kind = SessionKind::Subsystem {
+            name: name.to_string(),
+        };
+        let app_session = self.start_session(channel_id, kind)?;
 
         session.channel_success(channel_id)?;
 
-        run_handler(handler, app_session);
+        self.run_handler(app_session);
 
         Ok(())
     }
-}
-
-fn run_handler(handler: Arc<dyn ErasedHandler>, mut session: Session) {
-    tokio::spawn(async move {
-        match handler.call(&mut session).await {
-            Ok(()) => {
-                let _ = session.do_exit().await;
-            }
-            Err(e) => {
-                tracing::error!("Handler error: {}", e);
-            }
-        }
-    });
 }

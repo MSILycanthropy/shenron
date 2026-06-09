@@ -14,6 +14,7 @@ unwrap_used = "warn"
 
 [dependencies]
 cap-std = { version = "4", optional = true }
+dyn-clone = "1"
 governor = { version = "0.10", optional = true }
 rand = "0.10"
 ratatui = { version = "0.30", optional = true, features = [

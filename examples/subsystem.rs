@@ -30,7 +30,7 @@ async fn app(session: &mut Session) -> shenron::Result {
                 session.exit(1)
             }
         },
-        SessionKind::Pty { .. } | SessionKind::Shell => {
+        SessionKind::Shell => {
             session
                 .write_str("This server only supports subsystems.\r\n")
                 .await?;

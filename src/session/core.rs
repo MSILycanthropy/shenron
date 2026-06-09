@@ -7,6 +7,7 @@ use crate::{Event, Extensions, PtySize, SessionKind};
 pub struct Session {
     channel: Option<Channel<Msg>>,
     kind: SessionKind,
+    pty: Option<(String, PtySize)>,
     user: String,
     public_key: Option<PublicKey>,
     env: HashMap<String, String>,
@@ -17,9 +18,11 @@ pub struct Session {
 }
 
 impl Session {
+    #[expect(clippy::too_many_arguments, reason = "pub(crate), one call site")]
     pub(crate) const fn new(
         channel: Channel<Msg>,
         kind: SessionKind,
+        pty: Option<(String, PtySize)>,
         user: String,
         public_key: Option<PublicKey>,
         env: HashMap<String, String>,
@@ -29,6 +32,7 @@ impl Session {
         Self {
             channel: Some(channel),
             kind,
+            pty,
             user,
             public_key,
             env,
@@ -58,7 +62,7 @@ impl Session {
                         pixel_height: pix_height,
                     };
 
-                    if let SessionKind::Pty { ref mut size, .. } = self.kind {
+                    if let Some((_, ref mut size)) = self.pty {
                         *size = new_size;
                     }
 
@@ -93,12 +97,11 @@ impl Session {
         self.kind.clone()
     }
 
+    /// The PTY the client requested, if any. Orthogonal to [`kind`](Self::kind):
+    /// `ssh -t host cmd` is an `Exec` session with a PTY.
     #[must_use]
     pub fn pty(&self) -> Option<(&str, PtySize)> {
-        match &self.kind {
-            SessionKind::Pty { term, size } => Some((term, *size)),
-            _ => None,
-        }
+        self.pty.as_ref().map(|(term, size)| (term.as_str(), *size))
     }
 
     #[must_use]
@@ -165,7 +168,7 @@ impl Session {
     }
 
     /// Attach a typed value, replacing any existing value of the same type.
-    pub fn insert<T: Any + Send + Sync>(&mut self, value: T) {
+    pub fn insert<T: Any + Clone + Send + Sync>(&mut self, value: T) {
         self.extensions.insert(value);
     }
 
@@ -263,7 +266,7 @@ impl Session {
 
     #[must_use]
     pub const fn is_interactive(&self) -> bool {
-        matches!(self.kind, SessionKind::Pty { .. } | SessionKind::Shell)
+        self.pty.is_some() || matches!(self.kind, SessionKind::Shell)
     }
 
     fn channel(&self) -> crate::Result<&Channel<Msg>> {
