@@ -73,10 +73,18 @@ impl Session {
         }
     }
 
+    /// Next chunk of input bytes, or `None` once the client is done sending.
+    ///
+    /// Non-input events arriving in between are consumed and discarded
+    /// (resizes still update [`Session::pty`]). To observe resizes or
+    /// signals as events, use [`Session::next`] instead.
     pub async fn input(&mut self) -> Option<Vec<u8>> {
-        match self.next().await? {
-            Event::Input(data) => Some(data),
-            _ => None,
+        loop {
+            match self.next().await? {
+                Event::Input(data) => return Some(data),
+                Event::Eof => return None,
+                _ => {}
+            }
         }
     }
 
