@@ -1,8 +1,5 @@
 use std::path::Path;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use russh::keys::{
     Algorithm, PrivateKey, decode_secret_key, load_secret_key, ssh_key::LineEnding,
 };
@@ -54,9 +51,16 @@ pub fn load_or_generate(path: &Path, options: HostKeyOptions) -> Result<PrivateK
     } = options;
 
     if path.exists() {
-        Ok(load_secret_key(path, passphrase.as_deref())?)
-    } else {
-        generate_and_persist(path, algorithm, passphrase.as_deref())
+        return Ok(load_secret_key(path, passphrase.as_deref())?);
+    }
+
+    match generate_and_persist(path, algorithm, passphrase.as_deref()) {
+        // Another process generated the key between our existence check and
+        // the create-new write; theirs won, use it.
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(load_secret_key(path, passphrase.as_deref())?)
+        }
+        result => result,
     }
 }
 
@@ -68,9 +72,12 @@ pub fn from_pem(bytes: &[u8], passphrase: Option<&str>) -> Result<PrivateKey> {
 }
 
 /// Generate a fresh host key of `opts.algorithm`, write it to `path` (and its
-/// public half to `<path>.pub`), and return it. Private key is `0o600`, parent
-/// dir `0o700`. When a passphrase is set, only the on-disk copy is encrypted;
-/// the returned key stays usable by the running server.
+/// public half to `<path>.pub`), and return it. The private key is created
+/// `0o600`; directories this call *creates* are `0o700`, pre-existing ones
+/// keep their permissions. Fails with `AlreadyExists` if the key file appeared
+/// since the caller's existence check. When a passphrase is set, only the
+/// on-disk copy is encrypted; the returned key stays usable by the running
+/// server.
 fn generate_and_persist(
     path: &Path,
     algorithm: Algorithm,
@@ -81,9 +88,12 @@ fn generate_and_persist(
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)?;
+        let mut dirs = std::fs::DirBuilder::new();
+        dirs.recursive(true);
         #[cfg(unix)]
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        std::os::unix::fs::DirBuilderExt::mode(&mut dirs, 0o700);
+
+        dirs.create(parent)?;
     }
 
     let on_disk = match passphrase {
@@ -91,9 +101,14 @@ fn generate_and_persist(
         None => key.clone(),
     };
 
-    on_disk.write_openssh_file(path, LineEnding::LF)?;
+    let pem = on_disk.to_openssh(LineEnding::LF)?;
+
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
     #[cfg(unix)]
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+
+    std::io::Write::write_all(&mut open.open(path)?, pem.as_bytes())?;
 
     // Wish writes `<path>.pub`; append rather than replace any extension.
     let mut pub_path = path.as_os_str().to_owned();
@@ -145,6 +160,49 @@ mod tests {
 
         let decrypted = load_secret_key(&path, Some("hunter2")).expect("decrypt");
         assert_eq!(decrypted.public_key(), key.public_key());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_parent_dir_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+
+        load_or_generate(&dir.path().join("key"), HostKeyOptions::default()).expect("generate");
+
+        let mode = std::fs::metadata(dir.path()).expect("meta").permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn created_parent_dir_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sub = dir.path().join("sub");
+
+        load_or_generate(&sub.join("key"), HostKeyOptions::default()).expect("generate");
+
+        let mode = std::fs::metadata(&sub).expect("meta").permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn generate_against_existing_file_does_not_clobber() {
+        let (_dir, path) = temp_path("key");
+        std::fs::write(&path, b"sentinel").expect("write");
+
+        let result = generate_and_persist(&path, Algorithm::Ed25519, None);
+
+        assert!(matches!(
+            result,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(std::fs::read(&path).expect("read"), b"sentinel");
     }
 
     #[test]
