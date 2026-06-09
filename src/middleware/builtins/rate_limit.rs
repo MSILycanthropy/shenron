@@ -1,4 +1,11 @@
-use std::{num::NonZeroU32, sync::Arc};
+use std::{
+    net::IpAddr,
+    num::NonZeroU32,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use governor::{
     Quota, RateLimiter as GovernorLimiter, clock::DefaultClock, middleware::NoOpMiddleware,
@@ -8,7 +15,12 @@ use governor::{
 use crate::{Middleware, Next, Result, Session};
 
 type KeyedLimiter =
-    GovernorLimiter<String, DashMapStateStore<String>, DefaultClock, NoOpMiddleware>;
+    GovernorLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultClock, NoOpMiddleware>;
+
+/// Sweep expired per-IP state every this many checks. Amortized inline
+/// instead of a background task: no runtime needed at construction, no task
+/// lifecycle, and sweeps only happen while there is actual load.
+const SWEEP_INTERVAL: u64 = 256;
 
 /// Per-IP rate limiting for established sessions.
 ///
@@ -20,6 +32,7 @@ type KeyedLimiter =
 pub struct RateLimiter {
     quota: Quota,
     limiter: Arc<KeyedLimiter>,
+    checks: Arc<AtomicU64>,
 }
 
 impl RateLimiter {
@@ -68,7 +81,23 @@ impl RateLimiter {
         Self {
             quota,
             limiter: Arc::new(GovernorLimiter::dashmap(quota)),
+            checks: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn check(&self, ip: IpAddr) -> bool {
+        // Without periodic eviction the per-IP map grows forever (one entry
+        // per address ever seen); retain_recent drops entries whose quota has
+        // fully replenished.
+        if self
+            .checks
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(SWEEP_INTERVAL)
+        {
+            self.limiter.retain_recent();
+        }
+
+        self.limiter.check_key(&ip).is_ok()
     }
 }
 
@@ -78,9 +107,7 @@ const fn non_zero(count: u32) -> NonZeroU32 {
 
 impl Middleware for RateLimiter {
     async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
-        let key = session.remote_addr().ip().to_string();
-
-        if self.limiter.check_key(&key).is_err() {
+        if !self.check(session.remote_addr().ip()) {
             session
                 .write_stderr_str("Rate limit exceeded, try again later\n")
                 .await?;
@@ -96,35 +123,50 @@ impl Middleware for RateLimiter {
 mod tests {
     use super::*;
 
-    fn allowed(limiter: &RateLimiter, key: &str) -> bool {
-        limiter.limiter.check_key(&key.to_string()).is_ok()
+    fn ip(last: u8) -> IpAddr {
+        IpAddr::from([10, 0, 0, last])
     }
 
     #[test]
     fn burst_defaults_to_sustained_count() {
         let limiter = RateLimiter::per_minute(3);
 
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(!allowed(&limiter, "10.0.0.1"));
+        assert!(limiter.check(ip(1)));
+        assert!(limiter.check(ip(1)));
+        assert!(limiter.check(ip(1)));
+        assert!(!limiter.check(ip(1)));
     }
 
     #[test]
     fn burst_caps_below_sustained_count() {
         let limiter = RateLimiter::per_hour(100).burst(2);
 
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(!allowed(&limiter, "10.0.0.1"));
+        assert!(limiter.check(ip(1)));
+        assert!(limiter.check(ip(1)));
+        assert!(!limiter.check(ip(1)));
     }
 
     #[test]
     fn keys_are_independent() {
         let limiter = RateLimiter::per_minute(1);
 
-        assert!(allowed(&limiter, "10.0.0.1"));
-        assert!(!allowed(&limiter, "10.0.0.1"));
-        assert!(allowed(&limiter, "10.0.0.2"));
+        assert!(limiter.check(ip(1)));
+        assert!(!limiter.check(ip(1)));
+        assert!(limiter.check(ip(2)));
+    }
+
+    #[test]
+    fn stale_entries_are_evicted() {
+        let limiter = RateLimiter::per_second(1);
+
+        assert!(limiter.check(ip(1)));
+        assert_eq!(limiter.limiter.len(), 1);
+
+        // An entry is droppable once its theoretical arrival time falls a full
+        // quota-period behind now: replenish (1s) + retention window (1s).
+        std::thread::sleep(std::time::Duration::from_millis(2100));
+        limiter.limiter.retain_recent();
+
+        assert_eq!(limiter.limiter.len(), 0);
     }
 }
