@@ -40,3 +40,7 @@ sftp = ["dep:russh-sftp", "dep:cap-std"]
 [[example]]
 name = "tui"
 required-features = ["ratatui"]
+
+[[example]]
+name = "sftp"
+required-features = ["sftp"]
