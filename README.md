@@ -212,17 +212,18 @@ Server::new()
     .app(my_app)
 ```
 
-Cap how long authentication and idle connections last, and detect dead peers
+Throttle failed auth attempts, cap idle connections, and detect dead peers
 with keepalives:
 
 ```rust
 use std::time::Duration;
 
 Server::new()
-    .auth_timeout(Duration::from_secs(30))        // time allowed to authenticate
-    .inactivity_timeout(Duration::from_secs(600)) // drop idle sessions
-    .keepalive_interval(Duration::from_secs(15))  // ping the client
-    .keepalive_max(3)                             // give up after N missed pings
+    .auth_rejection_delay(Duration::from_secs(2))            // stall failed auth attempts
+    .auth_rejection_delay_initial(Duration::from_millis(50)) // but fail the `none` probe fast
+    .inactivity_timeout(Duration::from_secs(600))            // drop idle sessions
+    .keepalive_interval(Duration::from_secs(15))             // ping the client
+    .keepalive_max(3)                                        // give up after N missed pings
     .app(my_app)
 ```
 

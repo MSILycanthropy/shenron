@@ -25,7 +25,8 @@ pub struct Server {
     middleware: Vec<Arc<dyn ErasedMiddleware>>,
     auth: AuthConfig,
     shutdown: Option<ShutdownFuture>,
-    auth_timeout: Option<Duration>,
+    auth_rejection_delay: Option<Duration>,
+    auth_rejection_delay_initial: Option<Duration>,
     inactivity_timeout: Option<Duration>,
     banner: Option<String>,
     keepalive_interval: Option<Duration>,
@@ -240,9 +241,29 @@ impl Server {
         self
     }
 
+    /// Constant delay before every *failed* auth attempt is answered.
+    ///
+    /// This is a brute-force throttle and timing-side-channel mitigation, not
+    /// a deadline: rejections always take exactly this long regardless of why
+    /// they failed, so an auth handler's timing can't leak which usernames
+    /// exist. russh defaults to 1 second — don't lower it without a reason.
     #[must_use]
-    pub const fn auth_timeout(mut self, duration: Duration) -> Self {
-        self.auth_timeout = Some(duration);
+    pub const fn auth_rejection_delay(mut self, duration: Duration) -> Self {
+        self.auth_rejection_delay = Some(duration);
+
+        self
+    }
+
+    /// Delay for the *first* rejected auth attempt on a connection.
+    ///
+    /// OpenSSH clients routinely probe with a `none` auth request to discover
+    /// the allowed methods; that probe is rejected by design. A shorter first
+    /// delay lets the probe fail fast so legitimate logins aren't slowed,
+    /// while later failures still wait the full
+    /// [`auth_rejection_delay`](Self::auth_rejection_delay).
+    #[must_use]
+    pub const fn auth_rejection_delay_initial(mut self, duration: Duration) -> Self {
+        self.auth_rejection_delay_initial = Some(duration);
 
         self
     }
@@ -359,9 +380,12 @@ impl Server {
             config.methods = self.auth.methods();
         }
 
-        if let Some(timeout) = self.auth_timeout {
-            config.auth_rejection_time = timeout;
-            config.auth_rejection_time_initial = Some(timeout);
+        if let Some(delay) = self.auth_rejection_delay {
+            config.auth_rejection_time = delay;
+        }
+
+        if let Some(delay) = self.auth_rejection_delay_initial {
+            config.auth_rejection_time_initial = Some(delay);
         }
 
         if let Some(timeout) = self.inactivity_timeout {
