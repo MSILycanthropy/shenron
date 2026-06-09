@@ -87,12 +87,12 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
         id: u32,
         filename: String,
         pflags: OpenFlags,
-        _attrs: FileAttributes,
+        attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let handle = self.next_handle();
 
         let file = if pflags.contains(OpenFlags::WRITE) || pflags.contains(OpenFlags::CREATE) {
-            self.fs.open_write(&filename, pflags)
+            self.fs.open_write(&filename, pflags, attrs.into())
         } else {
             self.fs.open_read(&filename)
         }

@@ -99,7 +99,12 @@ impl Filesystem for LocalFilesystem {
         Ok(Box::new(LocalFile::new(file)))
     }
 
-    fn open_write(&self, path: &str, flags: OpenFlags) -> io::Result<Box<dyn FileHandle>> {
+    fn open_write(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        attrs: FileAttr,
+    ) -> io::Result<Box<dyn FileHandle>> {
         let mut opts = OpenOptions::new();
 
         opts.write(true)
@@ -115,12 +120,27 @@ impl Filesystem for LocalFilesystem {
             }
         }
 
+        // The mode only takes effect when the open creates the file, so the
+        // client's upload permissions land at syscall time — no chmod window.
+        #[cfg(unix)]
+        if let Some(mode) = attrs.permissions {
+            cap_std::fs::OpenOptionsExt::mode(&mut opts, mode & 0o7777);
+        }
+
         let file = self.root.open_with(rel(path), &opts)?;
 
         Ok(Box::new(LocalFile::new(file)))
     }
 
-    fn mkdir(&self, path: &str, _attrs: FileAttr) -> io::Result<()> {
+    fn mkdir(&self, path: &str, attrs: FileAttr) -> io::Result<()> {
+        #[cfg(unix)]
+        if let Some(mode) = attrs.permissions {
+            let mut builder = cap_std::fs::DirBuilder::new();
+            cap_std::fs::DirBuilderExt::mode(&mut builder, mode & 0o7777);
+
+            return self.root.create_dir_with(rel(path), &builder);
+        }
+
         self.root.create_dir(rel(path))
     }
 

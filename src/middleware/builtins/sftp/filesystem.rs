@@ -34,13 +34,19 @@ pub trait Filesystem: Send + Sync + Clone + 'static {
     /// other OS errors
     fn open_read(&self, path: &str) -> io::Result<Box<dyn FileHandle>>;
 
-    /// Open a file for writing
+    /// Open a file for writing. `attrs.permissions` applies when the file is
+    /// created (masked with `0o7777`, like OpenSSH); ignored for existing files.
     ///
     /// # Errors
     ///
     /// This function will return an error if the file doesn't exist or
     /// there are other OS errors
-    fn open_write(&self, path: &str, flags: OpenFlags) -> io::Result<Box<dyn FileHandle>>;
+    fn open_write(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        attrs: FileAttr,
+    ) -> io::Result<Box<dyn FileHandle>>;
 
     /// Make a directory
     ///

@@ -32,6 +32,7 @@ fn write_then_read_roundtrips() {
         .open_write(
             "/new.txt",
             russh_sftp::protocol::OpenFlags::CREATE | russh_sftp::protocol::OpenFlags::WRITE,
+            shenron::sftp::FileAttr::default(),
         )
         .expect("open_write");
     writer.write(0, b"payload").expect("write");
@@ -58,6 +59,7 @@ fn rejects_parent_directory_traversal() {
         fs.open_write(
             "/../shenron-secret.txt",
             russh_sftp::protocol::OpenFlags::WRITE,
+            shenron::sftp::FileAttr::default(),
         )
         .is_err()
     );
@@ -73,6 +75,51 @@ fn realpath_is_virtual_not_host_path() {
 
     // Must be the path as the client sees it, never the host's real location.
     assert_eq!(resolved, "/hello.txt");
+}
+
+#[cfg(unix)]
+#[test]
+fn create_honors_client_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, fs) = root_with_file();
+
+    let attrs = shenron::sftp::FileAttr {
+        permissions: Some(0o600),
+        ..Default::default()
+    };
+    fs.open_write(
+        "/secret.key",
+        russh_sftp::protocol::OpenFlags::CREATE | russh_sftp::protocol::OpenFlags::WRITE,
+        attrs,
+    )
+    .expect("open_write");
+
+    let mode = std::fs::metadata(dir.path().join("secret.key"))
+        .expect("meta")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn mkdir_honors_client_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (dir, fs) = root_with_file();
+
+    let attrs = shenron::sftp::FileAttr {
+        permissions: Some(0o700),
+        ..Default::default()
+    };
+    fs.mkdir("/private", attrs).expect("mkdir");
+
+    let mode = std::fs::metadata(dir.path().join("private"))
+        .expect("meta")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
 }
 
 #[test]
