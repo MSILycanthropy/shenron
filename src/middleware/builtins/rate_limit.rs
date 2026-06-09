@@ -18,39 +18,62 @@ type KeyedLimiter =
 /// limits (e.g. a firewall) if you need to defend the handshake itself.
 #[derive(Clone)]
 pub struct RateLimiter {
+    quota: Quota,
     limiter: Arc<KeyedLimiter>,
 }
 
 impl RateLimiter {
-    #[must_use]
-    /// Create a rate limiter that allows `count` connections per `period` per IP
+    /// Allow `count` new sessions per second per IP
     ///
     /// # Panics
     ///
-    /// Panics if
-    ///   - period is zero
-    ///   - count is zero
-    pub fn new(count: u32, period: std::time::Duration) -> Self {
-        let quota = Quota::with_period(period)
-            .expect("period cannot be 0")
-            .allow_burst(NonZeroU32::new(count).expect("count cannot be 0"));
+    /// Panics if `count` is zero
+    #[must_use]
+    pub fn per_second(count: u32) -> Self {
+        Self::from_quota(Quota::per_second(non_zero(count)))
+    }
 
+    /// Allow `count` new sessions per minute per IP
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is zero
+    #[must_use]
+    pub fn per_minute(count: u32) -> Self {
+        Self::from_quota(Quota::per_minute(non_zero(count)))
+    }
+
+    /// Allow `count` new sessions per hour per IP
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is zero
+    #[must_use]
+    pub fn per_hour(count: u32) -> Self {
+        Self::from_quota(Quota::per_hour(non_zero(count)))
+    }
+
+    /// Cap how many sessions an IP can start at once, independent of the
+    /// sustained rate. Defaults to the sustained `count` when not set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `count` is zero
+    #[must_use]
+    pub fn burst(self, count: u32) -> Self {
+        Self::from_quota(self.quota.allow_burst(non_zero(count)))
+    }
+
+    fn from_quota(quota: Quota) -> Self {
         Self {
+            quota,
             limiter: Arc::new(GovernorLimiter::dashmap(quota)),
         }
     }
+}
 
-    /// Create a rate limiter that allows `count` connections per second per IP
-    #[must_use]
-    pub fn per_second(count: u32) -> Self {
-        Self::new(count, std::time::Duration::from_secs(1))
-    }
-
-    /// Create a rate limiter that allows `count` connections per minute per IP
-    #[must_use]
-    pub fn per_minute(count: u32) -> Self {
-        Self::new(count, std::time::Duration::from_mins(1))
-    }
+const fn non_zero(count: u32) -> NonZeroU32 {
+    NonZeroU32::new(count).expect("count cannot be 0")
 }
 
 impl Middleware for RateLimiter {
@@ -66,5 +89,42 @@ impl Middleware for RateLimiter {
         }
 
         next.run(session).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allowed(limiter: &RateLimiter, key: &str) -> bool {
+        limiter.limiter.check_key(&key.to_string()).is_ok()
+    }
+
+    #[test]
+    fn burst_defaults_to_sustained_count() {
+        let limiter = RateLimiter::per_minute(3);
+
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(!allowed(&limiter, "10.0.0.1"));
+    }
+
+    #[test]
+    fn burst_caps_below_sustained_count() {
+        let limiter = RateLimiter::per_hour(100).burst(2);
+
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(!allowed(&limiter, "10.0.0.1"));
+    }
+
+    #[test]
+    fn keys_are_independent() {
+        let limiter = RateLimiter::per_minute(1);
+
+        assert!(allowed(&limiter, "10.0.0.1"));
+        assert!(!allowed(&limiter, "10.0.0.1"));
+        assert!(allowed(&limiter, "10.0.0.2"));
     }
 }
