@@ -9,6 +9,11 @@ use russh_sftp::protocol::{
 
 use crate::middleware::builtins::sftp::filesystem::{DirEntry, FileHandle, Filesystem};
 
+/// `len` in `SSH_FXP_READ` is client-controlled; clamp it so a hostile
+/// `len = u32::MAX` can't force a 4 GiB allocation. Short reads are legal —
+/// clients re-request the remainder. Matches russh-sftp's packet cap.
+const MAX_READ_LEN: u32 = 256 * 1024;
+
 /// Internal handler that implements `russh_sftp::server::Handler`
 pub struct SftpHandler<F: Filesystem> {
     fs: F,
@@ -109,7 +114,9 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
             return Err(StatusCode::Failure);
         };
 
-        let data = f.read(offset, len).map_err(|_| StatusCode::Failure)?;
+        let data = f
+            .read(offset, len.min(MAX_READ_LEN))
+            .map_err(|_| StatusCode::Failure)?;
 
         if data.is_empty() {
             return Err(StatusCode::Eof);
