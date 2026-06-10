@@ -5,7 +5,7 @@
 [russh]: https://github.com/Eugeny/russh
 [contribute]: https://github.com/MSILycanthropy/Shenron/contribute
 
-🐉 Come forth, Shenron! Grant my wish — Elegant SSH apps in Rust! 🐉
+🐉 Elegant SSH apps in Rust! 🐉
 
 SSH is a great platform for building applications that are accessible remotely.
 
@@ -19,7 +19,7 @@ to provide a UI for users.
 Shenron is an SSH server with sensible defaults and a collection of middleware to make
 building SSH applications painless. Shenron is inspired heavily by [charmbracelet/wish][wish].
 
-Shenron is built on [Eugeny/russh][russh], so OpenSSH is not needed at all. Shenron never spawns a shell or executes commands on its own — your handler decides exactly what every session can do, so there's no `openssh-server` behavior to accidentally expose.
+Shenron is built on [Eugeny/russh][russh], so OpenSSH is not needed at all. Shenron never spawns a shell or executes commands on its own, your handler decides exactly what every session can do, so there's no `openssh-server` behavior to accidentally expose.
 
 ## What is an SSH app?
 
