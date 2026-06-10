@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{collections::VecDeque, io::Write};
 
 use ratatui::{
     Frame, Terminal as RatatuiTerminal, TerminalOptions, Viewport, layout::Rect,
@@ -9,7 +9,11 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{
     Error, Result, Session,
     events::{Event as RawEvent, Events},
-    tui::{event::Event, key::parse_key_event, writer::SessionWriter},
+    tui::{
+        event::Event,
+        key::{Input, parse_input},
+        writer::SessionWriter,
+    },
 };
 
 type Backend = CrosstermBackend<SessionWriter>;
@@ -23,6 +27,9 @@ type Backend = CrosstermBackend<SessionWriter>;
 pub struct Tui<'a, M = ()> {
     events: Events<'a, M>,
     terminal: RatatuiTerminal<Backend>,
+    /// Keys still queued from the last input packet — one packet can carry
+    /// many keys (paste, fast typing), delivered one per [`next`](Self::next).
+    pending: VecDeque<Input>,
     alt_screen: bool,
     entered: bool,
 }
@@ -44,6 +51,7 @@ impl<'a, M> Tui<'a, M> {
         Ok(Self {
             events: Events::new(session),
             terminal,
+            pending: VecDeque::new(),
             alt_screen: false,
             entered: false,
         })
@@ -104,16 +112,20 @@ impl<'a, M> Tui<'a, M> {
         self.events.write(&data).await
     }
 
-    /// Await the next event, parsing input into keys and resizing the terminal
-    /// in step with the client. Unparseable input and signals are skipped.
+    /// Await the next event, parsing input into keys and pastes and resizing
+    /// the terminal in step with the client. Unparseable input, mouse
+    /// reports, and signals are skipped.
     pub async fn next(&mut self) -> Option<Event<M>> {
         loop {
+            if let Some(input) = self.pending.pop_front() {
+                return Some(match input {
+                    Input::Key(key) => Event::Key(key),
+                    Input::Paste(text) => Event::Paste(text),
+                });
+            }
+
             match self.events.next().await? {
-                RawEvent::Input(bytes) => {
-                    if let Some(key) = parse_key_event(&bytes) {
-                        return Some(Event::Key(key));
-                    }
-                }
+                RawEvent::Input(bytes) => self.pending.extend(parse_input(&bytes)),
                 RawEvent::Resize(size) => {
                     if let Ok(rect) = size.try_into() {
                         let _ = self.terminal.resize(rect);

@@ -11,6 +11,9 @@ use crate::PtySize;
 pub enum Event<M = ()> {
     /// A parsed key press.
     Key(KeyEvent),
+    /// Text inserted via bracketed paste, delivered as one event instead of
+    /// a stream of key presses.
+    Paste(String),
     /// The client's terminal was resized; the [`Tui`](crate::tui::Tui) has
     /// already resized its terminal.
     Resize(PtySize),

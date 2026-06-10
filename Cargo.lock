@@ -2754,6 +2754,7 @@ dependencies = [
  "russh-sftp",
  "shell-words",
  "tempfile",
+ "terminput",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3005,6 +3006,15 @@ dependencies = [
  "nom",
  "phf",
  "phf_codegen",
+]
+
+[[package]]
+name = "terminput"
+version = "0.5.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8908e11ccbb43dca64278fb750affa925c3655112859c69d017e7b44f598165b"
+dependencies = [
+ "bitflags 2.13.0",
 ]
 
 [[package]]

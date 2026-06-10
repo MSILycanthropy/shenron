@@ -65,6 +65,7 @@ async fn counter(session: &mut Session) -> Result {
                 KeyCode::Char(c) => state.message = format!("You pressed: {c}"),
                 _ => {}
             },
+            Some(tui::Event::Paste(text)) => state.message = format!("Pasted: {text}"),
             Some(tui::Event::App(Msg::Tick)) => state.ticks += 1,
             Some(tui::Event::Resize(_)) => {}
             Some(tui::Event::Eof) | None => break,
