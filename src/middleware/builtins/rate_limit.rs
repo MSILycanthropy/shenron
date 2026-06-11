@@ -8,14 +8,16 @@ use std::{
 };
 
 use governor::{
-    Quota, RateLimiter as GovernorLimiter, clock::DefaultClock, middleware::NoOpMiddleware,
+    Quota, RateLimiter as GovernorLimiter,
+    clock::{Clock, DefaultClock},
+    middleware::NoOpMiddleware,
     state::keyed::DashMapStateStore,
 };
 
 use crate::{Exit, Middleware, Next, Result, Session};
 
-type KeyedLimiter =
-    GovernorLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultClock, NoOpMiddleware>;
+type KeyedLimiter<C> =
+    GovernorLimiter<IpAddr, DashMapStateStore<IpAddr>, C, NoOpMiddleware<<C as Clock>::Instant>>;
 
 /// Sweep expired per-IP state every this many checks. Amortized inline
 /// instead of a background task: no runtime needed at construction, no task
@@ -28,10 +30,12 @@ const SWEEP_INTERVAL: u64 = 256;
 /// authenticated and opened a channel. It throttles abusive *session* rates,
 /// not raw connection or failed-auth floods — pair it with network-level
 /// limits (e.g. a firewall) if you need to defend the handshake itself.
+/// Generic over the clock only so tests can drive eviction deterministically
+/// with [`governor::clock::FakeRelativeClock`]; servers use the default.
 #[derive(Clone)]
-pub struct RateLimiter {
+pub struct RateLimiter<C: Clock = DefaultClock> {
     quota: Quota,
-    limiter: Arc<KeyedLimiter>,
+    limiter: Arc<KeyedLimiter<C>>,
     checks: Arc<AtomicU64>,
 }
 
@@ -81,6 +85,17 @@ impl RateLimiter {
         Self {
             quota,
             limiter: Arc::new(GovernorLimiter::dashmap(quota)),
+            checks: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl<C: Clock> RateLimiter<C> {
+    #[cfg(test)]
+    fn with_clock(quota: Quota, clock: C) -> Self {
+        Self {
+            quota,
+            limiter: Arc::new(GovernorLimiter::dashmap_with_clock(quota, clock)),
             checks: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -159,14 +174,18 @@ mod tests {
 
     #[test]
     fn stale_entries_are_evicted() {
-        let limiter = RateLimiter::per_second(1);
+        // A fake clock instead of sleeping: the default quanta clock measures
+        // TSC ticks, which drift from wall time under load — sleeps calibrated
+        // against it flake. Advancing manually is exact and instant.
+        let clock = governor::clock::FakeRelativeClock::default();
+        let limiter = RateLimiter::with_clock(Quota::per_second(non_zero(1)), clock.clone());
 
         assert!(limiter.check(ip(1)));
         assert_eq!(limiter.limiter.len(), 1);
 
         // An entry is droppable once its theoretical arrival time falls a full
         // quota-period behind now: replenish (1s) + retention window (1s).
-        std::thread::sleep(std::time::Duration::from_millis(2100));
+        clock.advance(std::time::Duration::from_secs(3));
         limiter.limiter.retain_recent();
 
         assert_eq!(limiter.limiter.len(), 0);
