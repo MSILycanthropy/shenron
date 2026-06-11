@@ -73,7 +73,7 @@ async fn counter(session: &mut Session) -> Result {
     }
 
     tui.close().await?;
-    session.exit(0)
+    Ok(())
 }
 
 fn draw_ui(frame: &mut Frame, state: &State) {

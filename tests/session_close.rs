@@ -8,7 +8,7 @@ mod common;
 use common::{connect_and_auth, read_to_close, start_server};
 use shenron::Session;
 
-/// Returning `Ok(())` without calling `exit()` reports success.
+/// Returning `Ok(())` reports success.
 async fn returns_without_exit(session: &mut Session) -> shenron::Result {
     session.write_str("done").await?;
 
@@ -19,8 +19,8 @@ async fn returns_error(_session: &mut Session) -> shenron::Result {
     Err(shenron::Error::Protocol("app blew up".into()))
 }
 
-async fn exits_nonzero(session: &mut Session) -> shenron::Result {
-    session.exit(3)
+async fn exits_nonzero(_session: &mut Session) -> shenron::Result<u32> {
+    Ok(3)
 }
 
 #[tokio::test]

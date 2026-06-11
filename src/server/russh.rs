@@ -150,16 +150,13 @@ impl ShenronHandler {
         tokio::spawn(async move {
             let _running = running;
 
-            let code = match handler.call(&mut session).await {
-                Ok(()) => session.exit_code().unwrap_or(0),
-                Err(e) => {
-                    tracing::error!("Handler error: {e}");
+            let exit = handler.call(&mut session).await;
 
-                    1
-                }
-            };
+            if let crate::Exit::Error(ref e) = exit {
+                tracing::error!("Handler error: {e}");
+            }
 
-            if let Err(e) = session.finish(code).await {
+            if let Err(e) = session.finish(exit.code()).await {
                 tracing::debug!("failed to close session channel: {e}");
             }
         });

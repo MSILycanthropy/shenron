@@ -36,5 +36,5 @@ async fn app(session: &mut Session) -> shenron::Result {
         .write_str(&format!("  REMOTE={}\r\n", session.remote_addr()))
         .await?;
 
-    session.exit(0)
+    Ok(())
 }

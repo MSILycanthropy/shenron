@@ -13,27 +13,30 @@ use shenron::{Auth, Server, Session};
 #[derive(Clone)]
 pub struct Account(pub u32);
 
-pub async fn start_server<F>(app: F) -> u16
+pub async fn start_server<F, R>(app: F) -> u16
 where
-    F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
+    F: AsyncFn(&mut Session) -> R + Send + Sync + 'static,
     for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+    R: shenron::IntoExit,
 {
     start(app, true).await
 }
 
 /// Like [`start_server`] but with no auth configured — the server is open.
-pub async fn start_open_server<F>(app: F) -> u16
+pub async fn start_open_server<F, R>(app: F) -> u16
 where
-    F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
+    F: AsyncFn(&mut Session) -> R + Send + Sync + 'static,
     for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+    R: shenron::IntoExit,
 {
     start(app, false).await
 }
 
-async fn start<F>(app: F, with_auth: bool) -> u16
+async fn start<F, R>(app: F, with_auth: bool) -> u16
 where
-    F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
+    F: AsyncFn(&mut Session) -> R + Send + Sync + 'static,
     for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+    R: shenron::IntoExit,
 {
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind probe")

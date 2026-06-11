@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use shenron::{Auth, Next, Result, Server, Session};
+use shenron::{Auth, Exit, Next, Result, Server, Session};
 
 /// Attached during pubkey auth, read back by the app.
 #[derive(Clone)]
@@ -17,7 +17,7 @@ struct RequestId(String);
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
 /// Tag each session with a unique request id before the app runs.
-async fn request_id(session: &mut Session, next: Next<'_>) -> Result {
+async fn request_id(session: &mut Session, next: Next<'_>) -> Exit {
     let n = REQUESTS.fetch_add(1, Ordering::Relaxed);
     session.insert(RequestId(format!("req-{n}")));
 
@@ -47,7 +47,7 @@ async fn app(session: &mut Session) -> Result {
             .await?;
     }
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::main]

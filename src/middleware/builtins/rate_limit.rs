@@ -12,7 +12,7 @@ use governor::{
     state::keyed::DashMapStateStore,
 };
 
-use crate::{Middleware, Next, Result, Session};
+use crate::{Exit, Middleware, Next, Result, Session};
 
 type KeyedLimiter =
     GovernorLimiter<IpAddr, DashMapStateStore<IpAddr>, DefaultClock, NoOpMiddleware>;
@@ -106,16 +106,18 @@ const fn non_zero(count: u32) -> NonZeroU32 {
 }
 
 impl Middleware for RateLimiter {
-    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
+    type Output = Result<Exit>;
+
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result<Exit> {
         if !self.check(session.remote_addr().ip()) {
             session
                 .write_stderr_str("Rate limit exceeded, try again later\n")
                 .await?;
 
-            return session.exit(1);
+            return Ok(Exit::Code(1));
         }
 
-        next.run(session).await
+        Ok(next.run(session).await)
     }
 }
 

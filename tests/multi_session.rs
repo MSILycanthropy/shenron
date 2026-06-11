@@ -25,7 +25,7 @@ async fn app(session: &mut Session) -> shenron::Result {
         ))
         .await?;
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::test]

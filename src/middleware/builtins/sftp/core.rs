@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    Middleware, Next, Result, Session, SessionKind,
+    Exit,
+    Middleware, Next, Session, SessionKind,
     middleware::builtins::sftp::{
         filesystem::Filesystem, handler::SftpHandler, local::LocalFilesystem,
     },
@@ -42,11 +43,13 @@ impl Sftp<LocalFilesystem> {
 }
 
 impl<F: Filesystem> Middleware for Sftp<F> {
-    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
+    type Output = Exit;
+
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Exit {
         match session.kind() {
             SessionKind::Subsystem { name } if name == "sftp" => {
                 let Some(channel) = session.take_channel() else {
-                    return Ok(());
+                    return Exit::Code(0);
                 };
 
                 let stream = channel.into_stream();
@@ -54,7 +57,7 @@ impl<F: Filesystem> Middleware for Sftp<F> {
 
                 russh_sftp::server::run(stream, handler).await;
 
-                Ok(())
+                Exit::Code(0)
             }
             _ => next.run(session).await,
         }

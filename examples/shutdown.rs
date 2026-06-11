@@ -47,5 +47,5 @@ async fn app(session: &mut Session) -> shenron::Result {
         SessionKind::Subsystem { .. } => {}
     }
 
-    session.exit(0)
+    Ok(())
 }

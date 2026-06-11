@@ -4,7 +4,7 @@ use std::{
 
 use tracing::error;
 
-use crate::{Error, Middleware, Next, Result, Session};
+use crate::{Error, Exit, Middleware, Next, Session};
 
 /// A panic caught while running the sub-chain, with the session context that was
 /// captured before the session was borrowed into `next`.
@@ -17,11 +17,11 @@ struct Panicked {
 /// Drive the rest of the chain, wrapping each `poll` in [`catch_unwind`] so a
 /// panic becomes an `Err` instead of unwinding through us.
 ///
-/// `Ok` carries the chain's own result (which may itself be `Err`); the outer
-/// `Err` means the chain panicked.
+/// `Ok` carries the chain's own [`Exit`] (which may itself be an error); the
+/// outer `Err` means the chain panicked.
 ///
 /// [`catch_unwind`]: std::panic::catch_unwind
-async fn guard(session: &mut Session, next: Next<'_>) -> std::result::Result<Result, Panicked> {
+async fn guard(session: &mut Session, next: Next<'_>) -> Result<Exit, Panicked> {
     let user = session.user().to_owned();
     let remote = session.remote_addr();
 
@@ -62,19 +62,14 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
 /// the connection closes cleanly. The server and other sessions are unaffected.
 ///
 /// Place it just inside your observability middleware (e.g.
-/// `.with(logging).with(recover).app(your_app)`) so a panic becomes an `Err`
-/// those outer layers can still observe.
-///
-/// # Errors
-///
-/// Returns [`Error::Panic`] if the wrapped chain panics, otherwise propagates
-/// the chain's own result.
-pub async fn recover(session: &mut Session, next: Next<'_>) -> Result {
+/// `.with(logging).with(recover).app(your_app)`) so a panic becomes an
+/// [`Exit::Error`] those outer layers can still observe.
+pub async fn recover(session: &mut Session, next: Next<'_>) -> Exit {
     match guard(session, next).await {
-        Ok(result) => result,
+        Ok(exit) => exit,
         Err(p) => {
             error!(user = %p.user, remote = %p.remote, panic = %p.message, "handler panicked");
-            Err(Error::Panic(p.message))
+            Exit::Error(Error::Panic(p.message))
         }
     }
 }
@@ -97,9 +92,11 @@ pub fn recover_with(callback: impl Fn(&PanicReport) + Send + Sync + 'static) -> 
 }
 
 impl Middleware for RecoverWith {
-    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
+    type Output = Exit;
+
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Exit {
         match guard(session, next).await {
-            Ok(result) => result,
+            Ok(exit) => exit,
             Err(p) => {
                 error!(user = %p.user, remote = %p.remote, panic = %p.message, "handler panicked");
                 (self.0)(&PanicReport {
@@ -107,7 +104,7 @@ impl Middleware for RecoverWith {
                     user: &p.user,
                     remote: p.remote,
                 });
-                Err(Error::Panic(p.message))
+                Exit::Error(Error::Panic(p.message))
             }
         }
     }

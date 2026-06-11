@@ -13,7 +13,6 @@ pub struct Session {
     env: HashMap<String, String>,
     extensions: Extensions,
     remote_addr: SocketAddr,
-    exit_code: Option<u32>,
     exited: bool,
 }
 
@@ -38,7 +37,6 @@ impl Session {
             env,
             extensions,
             remote_addr,
-            exit_code: None,
             exited: false,
         }
     }
@@ -242,25 +240,12 @@ impl Session {
         self.write_stderr(s.as_bytes()).await
     }
 
-    /// Record a non-zero exit code to report when the handler returns.
+    /// Send the exit status and close the channel immediately, without
+    /// waiting for the handler to return. The handler's eventual return value
+    /// is then ignored ([`finish`](Self::finish) is idempotent).
     ///
-    /// Calling this is only needed for failure codes: a handler returning
-    /// `Ok(())` reports exit 0, and a handler returning `Err` reports exit 1.
-    /// Returns an always-`Ok` `Result` so middleware can `return session.exit(1)`.
-    /// To close the channel immediately instead, use [`abort`](Self::abort).
-    #[allow(clippy::missing_errors_doc)]
-    pub const fn exit(&mut self, code: u32) -> crate::Result {
-        self.exit_code = Some(code);
-
-        Ok(())
-    }
-
-    #[must_use]
-    pub const fn exit_code(&self) -> Option<u32> {
-        self.exit_code
-    }
-
-    /// Set exit code and exit immediately
+    /// Rarely needed: returning from the handler is the normal way to exit —
+    /// `Ok(())` reports 0, a `u32` reports that code, `Err` reports 1.
     ///
     /// # Errors
     ///
@@ -269,8 +254,6 @@ impl Session {
     ///   - Sending the eof message fails
     ///   - Closing the channel fails
     pub async fn abort(&mut self, code: u32) -> crate::Result {
-        self.exit_code = Some(code);
-
         self.finish(code).await
     }
 
@@ -294,11 +277,6 @@ impl Session {
     #[cfg(feature = "ratatui")]
     pub fn tui<M>(&mut self) -> crate::Result<crate::tui::Tui<'_, M>> {
         crate::tui::Tui::new(self)
-    }
-
-    #[must_use]
-    pub const fn will_exit(&self) -> bool {
-        self.exit_code.is_some()
     }
 
     #[must_use]

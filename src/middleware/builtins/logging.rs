@@ -2,15 +2,10 @@ use std::fmt::Write as _;
 
 use tracing::{error, info};
 
-use crate::{Next, Session, SessionKind};
+use crate::{Exit, Next, Session, SessionKind};
 
 /// Middleware that logs session starting, ending and errors
-///
-/// # Errors
-///
-/// Returns `err` if
-///   - The next middleware in the chain returns `Err`
-pub async fn logging(session: &mut Session, next: Next<'_>) -> crate::Result {
+pub async fn logging(session: &mut Session, next: Next<'_>) -> Exit {
     let user = session.user().to_owned();
     let remote = session.remote_addr();
     let mut kind = match session.kind() {
@@ -31,21 +26,20 @@ pub async fn logging(session: &mut Session, next: Next<'_>) -> crate::Result {
     );
 
     let start = std::time::Instant::now();
-    let result = next.run(session).await;
+    let exit = next.run(session).await;
     let elapsed = start.elapsed();
 
-    match &result {
-        Ok(()) => {
-            let exit_code = session.exit_code().unwrap_or(0);
+    match &exit {
+        Exit::Code(code) => {
             info!(
                 user = %user,
                 remote = %remote,
                 elapsed = ?elapsed,
-                exit_code = %exit_code,
+                exit_code = %code,
                 "session ended"
             );
         }
-        Err(e) => {
+        Exit::Error(e) => {
             error!(
                 user = %user,
                 remote = %remote,
@@ -56,5 +50,5 @@ pub async fn logging(session: &mut Session, next: Next<'_>) -> crate::Result {
         }
     }
 
-    result
+    exit
 }

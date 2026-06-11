@@ -1,4 +1,4 @@
-use shenron::{Event, Next, Result, Server, Session};
+use shenron::{Event, Exit, Next, Result, Server, Session};
 
 async fn echo(session: &mut Session) -> Result {
     session.write_str("Welcome to Shenron!\r\n").await?;
@@ -31,18 +31,18 @@ async fn echo(session: &mut Session) -> Result {
         }
     }
 
-    session.exit(0)
+    Ok(())
 }
 
-async fn log(session: &mut Session, next: Next<'_>) -> Result {
+async fn log(session: &mut Session, next: Next<'_>) -> Exit {
     tracing::info!(
         "{} connected from {}",
         session.user(),
         session.remote_addr()
     );
-    let result = next.run(session).await;
+    let exit = next.run(session).await;
     tracing::info!("session ended");
-    result
+    exit
 }
 
 #[tokio::main]

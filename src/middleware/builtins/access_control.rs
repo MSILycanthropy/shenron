@@ -1,4 +1,4 @@
-use crate::{Middleware, Next, Result, Session};
+use crate::{Exit, Middleware, Next, Result, Session};
 
 /// Allowlist of programs an exec request may run (Wish `accesscontrol` parity).
 ///
@@ -28,16 +28,18 @@ impl AccessControl {
 }
 
 impl Middleware for AccessControl {
-    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result {
+    type Output = Result<Exit>;
+
+    async fn handle(&self, session: &'_ mut Session, next: Next<'_>) -> Result<Exit> {
         if session.raw_command().is_none() {
-            return next.run(session).await;
+            return Ok(next.run(session).await);
         }
 
         if let Some(argv) = session.command()
             && let Some(program) = argv.first()
             && self.is_allowed(program)
         {
-            return next.run(session).await;
+            return Ok(next.run(session).await);
         }
 
         let raw = session.raw_command().unwrap_or_default();
@@ -45,7 +47,7 @@ impl Middleware for AccessControl {
 
         session.write_stderr_str(&message).await?;
 
-        session.exit(1)
+        Ok(Exit::Code(1))
     }
 }
 

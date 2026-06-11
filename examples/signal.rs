@@ -34,7 +34,7 @@ async fn signal(session: &mut Session) -> shenron::Result {
         }
     }
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::main]

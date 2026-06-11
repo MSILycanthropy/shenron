@@ -296,10 +296,11 @@ impl Server {
     /// middleware registered *after* it nest inside the app and never run,
     /// since the app ignores `next`.
     #[must_use]
-    pub fn app<F>(self, app: F) -> Self
+    pub fn app<F, R>(self, app: F) -> Self
     where
-        F: AsyncFn(&mut Session) -> crate::Result + Send + Sync + 'static,
+        F: AsyncFn(&mut Session) -> R + Send + Sync + 'static,
         for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+        R: crate::IntoExit,
     {
         self.with(middleware::terminal(app))
     }
@@ -313,7 +314,7 @@ impl Server {
     /// ```no_run
     /// # use shenron::{Server, Session};
     /// # async fn app(session: &mut Session) -> shenron::Result {
-    /// #     session.exit(0)
+    /// #     Ok(())
     /// # }
     /// # async fn run() -> shenron::Result<()> {
     /// Server::new()

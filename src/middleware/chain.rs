@@ -1,7 +1,7 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
-    Next, Result, Session,
+    Exit, Next, Session,
     middleware::{ErasedHandler, ErasedMiddleware},
 };
 
@@ -24,8 +24,8 @@ pub(crate) fn build_chain(middleware: Vec<Arc<dyn ErasedMiddleware>>) -> Arc<dyn
 struct Base;
 
 impl ErasedHandler for Base {
-    fn call<'a>(&'a self, _session: &'a mut Session) -> BoxFuture<'a, Result> {
-        Box::pin(async { Ok(()) })
+    fn call<'a>(&'a self, _session: &'a mut Session) -> BoxFuture<'a, Exit> {
+        Box::pin(async { Exit::Code(0) })
     }
 }
 
@@ -35,7 +35,7 @@ struct MiddlewareHandler {
 }
 
 impl ErasedHandler for MiddlewareHandler {
-    fn call<'a>(&'a self, session: &'a mut Session) -> BoxFuture<'a, Result> {
+    fn call<'a>(&'a self, session: &'a mut Session) -> BoxFuture<'a, Exit> {
         let next = Next::new(self.next.as_ref());
 
         self.middleware.handle(session, next)

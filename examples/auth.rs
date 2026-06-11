@@ -20,7 +20,7 @@ async fn whoami(session: &mut Session) -> Result {
 
     session.write_str("Goodbye!\r\n").await?;
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::main]

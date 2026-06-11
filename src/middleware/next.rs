@@ -1,4 +1,4 @@
-use crate::{Result, Session, middleware::ErasedHandler};
+use crate::{Exit, Session, middleware::ErasedHandler};
 
 /// The next handler in the middleware chain.
 pub struct Next<'a> {
@@ -10,12 +10,10 @@ impl<'a> Next<'a> {
         Self { inner }
     }
 
-    /// Run the next middleware in the chain.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if the next middleware fails.
-    pub async fn run(self, session: &mut Session) -> Result {
+    /// Run the next middleware in the chain, resolving its return value to
+    /// an [`Exit`]. Failures arrive as [`Exit::Error`] rather than `Err`, so
+    /// callers inspect rather than `?`.
+    pub async fn run(self, session: &mut Session) -> Exit {
         self.inner.call(session).await
     }
 }

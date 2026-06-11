@@ -5,7 +5,7 @@ async fn shell(session: &mut Session) -> Result {
         .write_str("This server only speaks SFTP. Try: sftp -P 2222 localhost\r\n")
         .await?;
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::main]

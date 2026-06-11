@@ -10,7 +10,7 @@ async fn sleep_and_die(session: &mut Session) -> Result {
 
     sleep(Duration::from_secs(1));
 
-    session.exit(0)
+    Ok(())
 }
 
 #[tokio::main]
