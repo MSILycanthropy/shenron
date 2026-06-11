@@ -39,7 +39,7 @@ impl russh::server::Server for ShenronServer {
     fn new_client(&mut self, addr: Option<SocketAddr>) -> Self::Handler {
         ShenronHandler {
             handler: Arc::clone(&self.handler),
-            remote_addr: addr.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))),
+            remote_addr: addr,
             pending: HashMap::new(),
             running: Arc::new(AtomicUsize::new(0)),
             user: None,
@@ -79,7 +79,7 @@ struct PendingChannel {
 
 pub(crate) struct ShenronHandler {
     handler: Arc<dyn ErasedHandler>,
-    remote_addr: SocketAddr,
+    remote_addr: Option<SocketAddr>,
     pending: HashMap<ChannelId, PendingChannel>,
     running: Arc<AtomicUsize>,
     user: Option<String>,
@@ -93,6 +93,18 @@ impl ShenronHandler {
     /// Record the user on success, or build a rejection that only advertises
     /// the auth methods this server actually has configured.
     fn finish_auth(&mut self, user: &str, accepted: bool) -> Auth {
+        // A connection whose peer address can't be read is already broken;
+        // refuse it rather than hand consumers (rate limiting, logging,
+        // allow-lists) a fabricated address they would trust.
+        if self.remote_addr.is_none() {
+            tracing::warn!(user, "rejecting connection with no peer address");
+
+            return Auth::Reject {
+                proceed_with_methods: Some(russh::MethodSet::empty()),
+                partial_success: false,
+            };
+        }
+
         if accepted {
             self.user = Some(user.to_string());
 
@@ -113,6 +125,12 @@ impl ShenronHandler {
             .remove(&id)
             .ok_or_else(|| crate::Error::Protocol("No channel available".into()))?;
 
+        // Unreachable in practice: finish_auth rejects addr-less connections,
+        // and no session starts before auth.
+        let remote_addr = self
+            .remote_addr
+            .ok_or_else(|| crate::Error::Protocol("No peer address".into()))?;
+
         Ok(Session::new(
             pending.channel,
             kind,
@@ -121,7 +139,7 @@ impl ShenronHandler {
             self.public_key.clone(),
             pending.env,
             self.extensions.clone(),
-            self.remote_addr,
+            remote_addr,
         ))
     }
 
@@ -333,5 +351,50 @@ impl russh::server::Handler for ShenronHandler {
         self.run_handler(app_session);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::middleware;
+
+    fn handler_with_addr(remote_addr: Option<SocketAddr>) -> ShenronHandler {
+        ShenronHandler {
+            handler: middleware::build_chain(vec![]),
+            remote_addr,
+            pending: HashMap::new(),
+            running: Arc::new(AtomicUsize::new(0)),
+            user: None,
+            public_key: None,
+            auth: Arc::new(AuthConfig::default()),
+            extensions: Extensions::default(),
+            banner: None,
+        }
+    }
+
+    #[test]
+    fn addr_less_connection_is_rejected_even_when_auth_accepts() {
+        let mut h = handler_with_addr(None);
+
+        let auth = h.finish_auth("anyone", true);
+
+        let Auth::Reject {
+            proceed_with_methods,
+            ..
+        } = auth
+        else {
+            panic!("must reject without a peer address");
+        };
+        assert!(proceed_with_methods.expect("methods").is_empty());
+        assert!(h.user.is_none());
+    }
+
+    #[test]
+    fn connection_with_addr_is_accepted() {
+        let mut h = handler_with_addr(Some(SocketAddr::from(([127, 0, 0, 1], 2222))));
+
+        assert!(matches!(h.finish_auth("anyone", true), Auth::Accept));
+        assert_eq!(h.user.as_deref(), Some("anyone"));
     }
 }

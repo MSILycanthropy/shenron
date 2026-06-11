@@ -164,6 +164,10 @@ impl Session {
         self.public_key.as_ref()
     }
 
+    /// The client's address, as reported by the accepted socket.
+    ///
+    /// Always the real peer address: connections whose address can't be read
+    /// are rejected during auth and never reach a session.
     #[must_use]
     pub const fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
