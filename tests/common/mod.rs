@@ -18,6 +18,23 @@ where
     F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
     for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
 {
+    start(app, true).await
+}
+
+/// Like [`start_server`] but with no auth configured — the server is open.
+pub async fn start_open_server<F>(app: F) -> u16
+where
+    F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
+    for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+{
+    start(app, false).await
+}
+
+async fn start<F>(app: F, with_auth: bool) -> u16
+where
+    F: AsyncFn(&mut Session) -> shenron::Result + Send + Sync + 'static,
+    for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+{
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind probe")
         .local_addr()
@@ -26,14 +43,16 @@ where
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
 
-    let server = Server::new()
+    let mut server = Server::new()
         .bind(format!("127.0.0.1:{port}"))
         .host_key_path(tmp.path().join("host_key"))
-        .expect("host key")
-        .password_auth(|_user, _password| async { Auth::accept().with(Account(42)) })
-        .app(app);
+        .expect("host key");
 
-    tokio::spawn(server.serve());
+    if with_auth {
+        server = server.password_auth(|_user, _password| async { Auth::accept().with(Account(42)) });
+    }
+
+    tokio::spawn(server.app(app).serve());
 
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))

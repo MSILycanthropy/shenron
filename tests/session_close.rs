@@ -1,5 +1,5 @@
 //! A session channel must close when the handler returns, however it returns.
-//! Regression tests for handlers that hang the client (sh-v6x.4).
+//! Regression tests for handlers that hang the client.
 
 #![feature(async_fn_traits, unboxed_closures)]
 

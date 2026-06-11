@@ -18,6 +18,17 @@ type ShutdownFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Matches Wish, which writes `id_ed25519` to the working directory.
 const DEFAULT_HOST_KEY_PATH: &str = "id_ed25519";
 
+/// An SSH application server.
+///
+/// # Security: open by default
+///
+/// **With no auth configured, every connection is accepted** — any username,
+/// any password, any key, or no credentials at all (`none` auth). This
+/// matches Wish and is intended for demos and trusted networks. For anything
+/// reachable from an untrusted network, configure
+/// [`password_auth`](Self::password_auth) and/or
+/// [`pubkey_auth`](Self::pubkey_auth); once either is set, only those
+/// methods are advertised and `none` is rejected.
 #[derive(Default)]
 pub struct Server {
     addr: Option<String>,
@@ -375,10 +386,7 @@ impl Server {
         let mut config = Config::default();
 
         config.keys.clone_from(&self.keys);
-
-        if !self.auth.is_empty() {
-            config.methods = self.auth.methods();
-        }
+        config.methods = self.auth.methods();
 
         if let Some(delay) = self.auth_rejection_delay {
             config.auth_rejection_time = delay;

@@ -187,6 +187,13 @@ impl russh::server::Handler for ShenronHandler {
         Ok(())
     }
 
+    /// An open server (no auth configured) accepts `none` so clients connect
+    /// without a credential prompt, like Wish. Configured servers reject it
+    /// and point the client at the real methods.
+    async fn auth_none(&mut self, user: &str) -> crate::Result<Auth> {
+        Ok(self.finish_auth(user, self.auth.is_empty()))
+    }
+
     async fn auth_publickey(&mut self, user: &str, public_key: &PublicKey) -> crate::Result<Auth> {
         let outcome: AuthOutcome = if let Some(ref handler) = self.auth.pubkey {
             handler.verify(user, public_key).await
