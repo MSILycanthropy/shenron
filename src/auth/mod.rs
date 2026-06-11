@@ -1,7 +1,7 @@
-pub mod config;
+pub(crate) mod config;
 pub mod outcome;
-pub mod password;
-pub mod pubkey;
+pub(crate) mod password;
+pub(crate) mod pubkey;
 
 pub(crate) use config::*;
 pub use outcome::*;

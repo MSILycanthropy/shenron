@@ -2,7 +2,7 @@
 ///
 /// PTY allocation is orthogonal — any kind can carry one (`ssh -t host cmd`
 /// is `Exec` with a PTY). See [`Session::pty`](crate::Session::pty).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum SessionKind {
     Shell,
     Exec { command: String },

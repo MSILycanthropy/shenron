@@ -3,7 +3,7 @@ use russh::keys::PublicKey;
 use crate::{Auth, BoxFuture};
 
 /// Type erased pubkey auth handler
-pub(crate) trait PubkeyAuth: Send + Sync {
+pub trait PubkeyAuth: Send + Sync {
     fn verify(&self, user: &str, key: &PublicKey) -> BoxFuture<Auth>;
 }
 

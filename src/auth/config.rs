@@ -6,7 +6,7 @@ use crate::auth::{PasswordAuth, PubkeyAuth};
 
 /// Configured authentication for a server
 #[derive(Default, Clone)]
-pub(crate) struct AuthConfig {
+pub struct AuthConfig {
     pub password: Option<Arc<dyn PasswordAuth>>,
     pub pubkey: Option<Arc<dyn PubkeyAuth>>,
 }

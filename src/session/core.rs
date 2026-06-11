@@ -93,8 +93,8 @@ impl Session {
     }
 
     #[must_use]
-    pub fn kind(&self) -> SessionKind {
-        self.kind.clone()
+    pub const fn kind(&self) -> &SessionKind {
+        &self.kind
     }
 
     /// The PTY the client requested, if any. Orthogonal to [`kind`](Self::kind):
@@ -190,6 +190,17 @@ impl Session {
     /// Attach a typed value, replacing any existing value of the same type.
     pub fn insert<T: Any + Clone + Send + Sync>(&mut self, value: T) {
         self.extensions.insert(value);
+    }
+
+    /// Mutably borrow a typed value attached during auth or by a middleware.
+    #[must_use]
+    pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
+        self.extensions.get_mut::<T>()
+    }
+
+    /// Take the stored value of type `T` out of the session, if present.
+    pub fn remove<T: Any>(&mut self) -> Option<T> {
+        self.extensions.remove::<T>()
     }
 
     /// Write data to the channel

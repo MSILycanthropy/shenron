@@ -1,7 +1,7 @@
 use crate::{Auth, BoxFuture};
 
 /// Type-erased password auth handler
-pub(crate) trait PasswordAuth: Send + Sync {
+pub trait PasswordAuth: Send + Sync {
     fn verify(&self, user: &str, password: &str) -> BoxFuture<Auth>;
 }
 
