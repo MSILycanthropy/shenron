@@ -14,6 +14,9 @@ unwrap_used = "warn"
 
 [dependencies]
 cap-std = { version = "4", optional = true }
+chrono = { version = "0.4", default-features = false, features = [
+  "std",
+], optional = true }
 dyn-clone = "1"
 governor = { version = "0.10", optional = true }
 rand = "0.10"
@@ -38,7 +41,7 @@ tracing-subscriber = "0.3.23"
 default = []
 rate-limiting = ["dep:governor"]
 ratatui = ["dep:ratatui", "dep:terminput"]
-sftp = ["dep:russh-sftp", "dep:cap-std"]
+sftp = ["dep:russh-sftp", "dep:cap-std", "dep:chrono"]
 
 [[example]]
 name = "tui"
