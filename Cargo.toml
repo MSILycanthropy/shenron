@@ -31,6 +31,7 @@ terminput = { version = "0.5", optional = true }
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }
 tracing = "0.1.44"
+trait-variant = { version = "0.1", optional = true }
 
 [dev-dependencies]
 chrono = "0.4"
@@ -41,7 +42,7 @@ tracing-subscriber = "0.3.23"
 default = []
 rate-limiting = ["dep:governor"]
 ratatui = ["dep:ratatui", "dep:terminput"]
-sftp = ["dep:russh-sftp", "dep:cap-std", "dep:chrono"]
+sftp = ["dep:russh-sftp", "dep:cap-std", "dep:chrono", "dep:trait-variant"]
 
 [[example]]
 name = "tui"

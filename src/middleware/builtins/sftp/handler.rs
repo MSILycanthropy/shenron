@@ -23,14 +23,14 @@ const READDIR_PAGE: usize = 128;
 /// Internal handler that implements `russh_sftp::server::Handler`
 pub struct SftpHandler<F: Filesystem> {
     fs: F,
-    handles: HashMap<String, HandleType>,
+    handles: HashMap<String, HandleType<F::Handle>>,
     next_handle: AtomicU64,
 
     version: Option<u32>,
 }
 
-enum HandleType {
-    File(Box<dyn FileHandle>),
+enum HandleType<H> {
+    File(H),
     Dir {
         entries: Vec<DirEntry>,
         offset: usize,
@@ -78,7 +78,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
         match self.handles.remove(&handle) {
-            Some(HandleType::File(f)) => f.close().map_err(|e| status_code(&e))?,
+            Some(HandleType::File(f)) => f.close().await.map_err(|e| status_code(&e))?,
             Some(HandleType::Dir { .. }) => {}
             None => return Err(StatusCode::Failure),
         }
@@ -96,9 +96,9 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
         let handle = self.next_handle();
 
         let file = if pflags.contains(OpenFlags::WRITE) || pflags.contains(OpenFlags::CREATE) {
-            self.fs.open_write(&filename, pflags, attrs.into())
+            self.fs.open_write(&filename, pflags, attrs.into()).await
         } else {
-            self.fs.open_read(&filename)
+            self.fs.open_read(&filename).await
         }
         .map_err(|e| status_code(&e))?;
 
@@ -118,7 +118,10 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
             return Err(StatusCode::Failure);
         };
 
-        let data = f.read(offset, len.min(MAX_READ_LEN)).map_err(|e| status_code(&e))?;
+        let data = f
+            .read(offset, len.min(MAX_READ_LEN))
+            .await
+            .map_err(|e| status_code(&e))?;
 
         if data.is_empty() {
             return Err(StatusCode::Eof);
@@ -138,13 +141,13 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
             return Err(StatusCode::Failure);
         };
 
-        f.write(offset, &data).map_err(|e| status_code(&e))?;
+        f.write(offset, data).await.map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
-        let entries = self.fs.read_dir(&path).map_err(|e| status_code(&e))?;
+        let entries = self.fs.read_dir(&path).await.map_err(|e| status_code(&e))?;
         let handle = self.next_handle();
 
         self.handles
@@ -179,7 +182,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
-        let real = self.fs.realpath(&path).map_err(|e| status_code(&e))?;
+        let real = self.fs.realpath(&path).await.map_err(|e| status_code(&e))?;
 
         Ok(Name {
             id,
@@ -192,7 +195,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     }
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
-        let attrs = self.fs.stat(&path).map_err(|e| status_code(&e))?;
+        let attrs = self.fs.stat(&path).await.map_err(|e| status_code(&e))?;
 
         Ok(Attrs {
             id,
@@ -201,7 +204,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
-        let attrs = self.fs.lstat(&path).map_err(|e| status_code(&e))?;
+        let attrs = self.fs.lstat(&path).await.map_err(|e| status_code(&e))?;
 
         Ok(Attrs {
             id,
@@ -214,7 +217,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
             return Err(StatusCode::Failure);
         };
 
-        let attrs = f.stat().map_err(|e| status_code(&e))?;
+        let attrs = f.stat().await.map_err(|e| status_code(&e))?;
 
         Ok(Attrs {
             id,
@@ -223,7 +226,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
-        self.fs.remove(&filename).map_err(|e| status_code(&e))?;
+        self.fs.remove(&filename).await.map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
@@ -234,13 +237,16 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
         path: String,
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
-        self.fs.mkdir(&path, attrs.into()).map_err(|e| status_code(&e))?;
+        self.fs
+            .mkdir(&path, attrs.into())
+            .await
+            .map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
-        self.fs.rmdir(&path).map_err(|e| status_code(&e))?;
+        self.fs.rmdir(&path).await.map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
@@ -251,7 +257,10 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
         oldpath: String,
         newpath: String,
     ) -> Result<Status, Self::Error> {
-        self.fs.rename(&oldpath, &newpath).map_err(|e| status_code(&e))?;
+        self.fs
+            .rename(&oldpath, &newpath)
+            .await
+            .map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
@@ -264,6 +273,7 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     ) -> Result<Status, Self::Error> {
         self.fs
             .set_stat(&path, attrs.into())
+            .await
             .map_err(|e| status_code(&e))?;
 
         status_ok(id)
@@ -279,7 +289,9 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
             return Err(StatusCode::Failure);
         };
 
-        f.set_stat(attrs.into()).map_err(|e| status_code(&e))?;
+        f.set_stat(attrs.into())
+            .await
+            .map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }

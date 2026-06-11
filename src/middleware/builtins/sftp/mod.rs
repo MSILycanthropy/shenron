@@ -5,4 +5,4 @@ mod local;
 
 pub use core::Sftp;
 pub use filesystem::{DirEntry, FileAttr, FileHandle, Filesystem};
-pub use local::LocalFilesystem;
+pub use local::{LocalFile, LocalFilesystem};

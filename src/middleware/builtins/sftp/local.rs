@@ -1,12 +1,8 @@
-use std::{
-    io::{self, Read, Seek, SeekFrom, Write},
-    path::Path,
-    sync::Arc,
-};
+use std::{io, path::Path, sync::Arc};
 
 use cap_std::{
     ambient_authority,
-    fs::{Dir, File, Metadata, MetadataExt, OpenOptions, Permissions, PermissionsExt},
+    fs::{Dir, File, FileExt, Metadata, MetadataExt, OpenOptions, Permissions, PermissionsExt},
 };
 use russh_sftp::protocol::OpenFlags;
 
@@ -18,6 +14,10 @@ use crate::middleware::builtins::sftp::filesystem::{DirEntry, FileAttr, FileHand
 /// resolves paths with `openat2`/`RESOLVE_BENEATH` semantics. Path traversal
 /// (`../`) and symlinks escaping the root are rejected by the kernel, not by
 /// string munging.
+///
+/// Syscalls run on tokio's blocking thread pool
+/// ([`tokio::task::spawn_blocking`]), so slow storage (NFS, network mounts)
+/// stalls only the request, never the async runtime.
 #[derive(Clone)]
 pub struct LocalFilesystem {
     root: Arc<Dir>,
@@ -49,12 +49,22 @@ impl LocalFilesystem {
     }
 }
 
+/// Run a blocking syscall on tokio's blocking pool. A `JoinError` means the
+/// closure panicked; surface it as an I/O error rather than unwinding.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(io::Error::other)?
+}
+
 /// SFTP paths are absolute (`/foo/bar`); cap-std treats paths as relative to
 /// the root, so strip the leading separator. The root itself maps to `.`.
-fn rel(path: &str) -> &str {
+fn rel(path: &str) -> String {
     let trimmed = path.trim_start_matches('/');
 
-    if trimmed.is_empty() { "." } else { trimmed }
+    if trimmed.is_empty() { "." } else { trimmed }.to_string()
 }
 
 fn meta_to_attr(meta: &Metadata) -> FileAttr {
@@ -69,168 +79,229 @@ fn meta_to_attr(meta: &Metadata) -> FileAttr {
 }
 
 impl Filesystem for LocalFilesystem {
-    fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>> {
-        let mut entries = vec![];
+    type Handle = LocalFile;
 
-        for entry in self.root.read_dir(rel(path))? {
-            let entry = entry?;
-            let meta = entry.metadata()?;
+    async fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-            entries.push(DirEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
-                attrs: meta_to_attr(&meta),
-            });
-        }
+        blocking(move || {
+            let mut entries = vec![];
 
-        Ok(entries)
+            for entry in root.read_dir(path)? {
+                let entry = entry?;
+                let meta = entry.metadata()?;
+
+                entries.push(DirEntry {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    attrs: meta_to_attr(&meta),
+                });
+            }
+
+            Ok(entries)
+        })
+        .await
     }
 
-    fn stat(&self, path: &str) -> io::Result<FileAttr> {
-        Ok(meta_to_attr(&self.root.metadata(rel(path))?))
+    async fn stat(&self, path: &str) -> io::Result<FileAttr> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
+
+        blocking(move || Ok(meta_to_attr(&root.metadata(path)?))).await
     }
 
-    fn lstat(&self, path: &str) -> io::Result<FileAttr> {
-        Ok(meta_to_attr(&self.root.symlink_metadata(rel(path))?))
+    async fn lstat(&self, path: &str) -> io::Result<FileAttr> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
+
+        blocking(move || Ok(meta_to_attr(&root.symlink_metadata(path)?))).await
     }
 
-    fn open_read(&self, path: &str) -> io::Result<Box<dyn FileHandle>> {
-        let file = self.root.open(rel(path))?;
+    async fn open_read(&self, path: &str) -> io::Result<LocalFile> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-        Ok(Box::new(LocalFile::new(file)))
+        blocking(move || Ok(LocalFile::new(root.open(path)?))).await
     }
 
-    fn open_write(
+    async fn open_write(
         &self,
         path: &str,
         flags: OpenFlags,
         attrs: FileAttr,
-    ) -> io::Result<Box<dyn FileHandle>> {
-        let mut opts = OpenOptions::new();
+    ) -> io::Result<LocalFile> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-        opts.write(true)
-            .read(flags.contains(OpenFlags::READ))
-            .append(flags.contains(OpenFlags::APPEND))
-            .truncate(flags.contains(OpenFlags::TRUNCATE));
+        blocking(move || {
+            let mut opts = OpenOptions::new();
 
-        if flags.contains(OpenFlags::CREATE) {
-            if flags.contains(OpenFlags::EXCLUDE) {
-                opts.create_new(true);
-            } else {
-                opts.create(true);
+            opts.write(true)
+                .read(flags.contains(OpenFlags::READ))
+                .append(flags.contains(OpenFlags::APPEND))
+                .truncate(flags.contains(OpenFlags::TRUNCATE));
+
+            if flags.contains(OpenFlags::CREATE) {
+                if flags.contains(OpenFlags::EXCLUDE) {
+                    opts.create_new(true);
+                } else {
+                    opts.create(true);
+                }
             }
-        }
 
-        // The mode only takes effect when the open creates the file, so the
-        // client's upload permissions land at syscall time — no chmod window.
-        #[cfg(unix)]
-        if let Some(mode) = attrs.permissions {
-            cap_std::fs::OpenOptionsExt::mode(&mut opts, mode & 0o7777);
-        }
+            // The mode only takes effect when the open creates the file, so the
+            // client's upload permissions land at syscall time — no chmod window.
+            #[cfg(unix)]
+            if let Some(mode) = attrs.permissions {
+                cap_std::fs::OpenOptionsExt::mode(&mut opts, mode & 0o7777);
+            }
 
-        let file = self.root.open_with(rel(path), &opts)?;
-
-        Ok(Box::new(LocalFile::new(file)))
+            Ok(LocalFile::new(root.open_with(path, &opts)?))
+        })
+        .await
     }
 
-    fn mkdir(&self, path: &str, attrs: FileAttr) -> io::Result<()> {
-        #[cfg(unix)]
-        if let Some(mode) = attrs.permissions {
-            let mut builder = cap_std::fs::DirBuilder::new();
-            cap_std::fs::DirBuilderExt::mode(&mut builder, mode & 0o7777);
+    async fn mkdir(&self, path: &str, attrs: FileAttr) -> io::Result<()> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-            return self.root.create_dir_with(rel(path), &builder);
-        }
+        blocking(move || {
+            #[cfg(unix)]
+            if let Some(mode) = attrs.permissions {
+                let mut builder = cap_std::fs::DirBuilder::new();
+                cap_std::fs::DirBuilderExt::mode(&mut builder, mode & 0o7777);
 
-        self.root.create_dir(rel(path))
+                return root.create_dir_with(path, &builder);
+            }
+
+            root.create_dir(path)
+        })
+        .await
     }
 
-    fn rmdir(&self, path: &str) -> io::Result<()> {
-        self.root.remove_dir(rel(path))
+    async fn rmdir(&self, path: &str) -> io::Result<()> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
+
+        blocking(move || root.remove_dir(path)).await
     }
 
-    fn remove(&self, path: &str) -> io::Result<()> {
-        self.root.remove_file(rel(path))
+    async fn remove(&self, path: &str) -> io::Result<()> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
+
+        blocking(move || root.remove_file(path)).await
     }
 
-    fn rename(&self, from: &str, to: &str) -> io::Result<()> {
-        self.root.rename(rel(from), &self.root, rel(to))
+    async fn rename(&self, from: &str, to: &str) -> io::Result<()> {
+        let root = Arc::clone(&self.root);
+        let from = rel(from);
+        let to = rel(to);
+
+        blocking(move || root.rename(from, &root, to)).await
     }
 
-    fn set_stat(&self, path: &str, attrs: FileAttr) -> io::Result<()> {
-        if let Some(mode) = attrs.permissions {
-            self.root
-                .set_permissions(rel(path), Permissions::from_mode(mode))?;
-        }
+    async fn set_stat(&self, path: &str, attrs: FileAttr) -> io::Result<()> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-        if let Some(size) = attrs.size {
-            self.root
-                .open_with(rel(path), OpenOptions::new().write(true))?
-                .set_len(size)?;
-        }
+        blocking(move || {
+            if let Some(mode) = attrs.permissions {
+                root.set_permissions(&path, Permissions::from_mode(mode))?;
+            }
 
-        Ok(())
+            if let Some(size) = attrs.size {
+                root.open_with(&path, OpenOptions::new().write(true))?
+                    .set_len(size)?;
+            }
+
+            Ok(())
+        })
+        .await
     }
 
-    fn realpath(&self, path: &str) -> io::Result<String> {
-        let canonical = self.root.canonicalize(rel(path))?;
-        let virtual_path = canonical.to_string_lossy();
+    async fn realpath(&self, path: &str) -> io::Result<String> {
+        let root = Arc::clone(&self.root);
+        let path = rel(path);
 
-        if virtual_path.is_empty() {
-            Ok("/".to_string())
-        } else {
-            Ok(format!("/{virtual_path}"))
-        }
+        blocking(move || {
+            let canonical = root.canonicalize(path)?;
+            let virtual_path = canonical.to_string_lossy();
+
+            if virtual_path.is_empty() {
+                Ok("/".to_string())
+            } else {
+                Ok(format!("/{virtual_path}"))
+            }
+        })
+        .await
     }
 }
 
-struct LocalFile {
-    file: File,
+/// Positional I/O (`read_at`/`write_at`) needs only `&File`, so the handle is
+/// shared with the blocking pool via `Arc` instead of moved back and forth.
+pub struct LocalFile {
+    file: Arc<File>,
 }
 
 impl LocalFile {
-    const fn new(file: File) -> Self {
-        Self { file }
+    fn new(file: File) -> Self {
+        Self {
+            file: Arc::new(file),
+        }
     }
 }
 
 impl FileHandle for LocalFile {
-    fn read(&mut self, offset: u64, len: u32) -> io::Result<Vec<u8>> {
-        self.file.seek(SeekFrom::Start(offset))?;
+    async fn read(&mut self, offset: u64, len: u32) -> io::Result<Vec<u8>> {
+        let file = Arc::clone(&self.file);
 
-        let mut buffer = vec![0u8; len as usize];
-        let len = self.file.read(&mut buffer)?;
+        blocking(move || {
+            let mut buffer = vec![0u8; len as usize];
+            let len = file.read_at(&mut buffer, offset)?;
 
-        buffer.truncate(len);
+            buffer.truncate(len);
 
-        Ok(buffer)
+            Ok(buffer)
+        })
+        .await
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) -> io::Result<u32> {
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(data)?;
+    async fn write(&mut self, offset: u64, data: Vec<u8>) -> io::Result<u32> {
+        let file = Arc::clone(&self.file);
 
-        let length = u32::try_from(data.len()).map_err(io::Error::other)?;
+        blocking(move || {
+            file.write_all_at(&data, offset)?;
 
-        Ok(length)
+            u32::try_from(data.len()).map_err(io::Error::other)
+        })
+        .await
     }
 
-    fn stat(&self) -> io::Result<FileAttr> {
-        Ok(meta_to_attr(&self.file.metadata()?))
+    async fn stat(&self) -> io::Result<FileAttr> {
+        let file = Arc::clone(&self.file);
+
+        blocking(move || Ok(meta_to_attr(&file.metadata()?))).await
     }
 
-    fn set_stat(&mut self, attrs: FileAttr) -> io::Result<()> {
-        if let Some(mode) = attrs.permissions {
-            self.file.set_permissions(Permissions::from_mode(mode))?;
-        }
+    async fn set_stat(&mut self, attrs: FileAttr) -> io::Result<()> {
+        let file = Arc::clone(&self.file);
 
-        if let Some(size) = attrs.size {
-            self.file.set_len(size)?;
-        }
+        blocking(move || {
+            if let Some(mode) = attrs.permissions {
+                file.set_permissions(Permissions::from_mode(mode))?;
+            }
 
-        Ok(())
+            if let Some(size) = attrs.size {
+                file.set_len(size)?;
+            }
+
+            Ok(())
+        })
+        .await
     }
 
-    fn close(self: Box<Self>) -> io::Result<()> {
+    async fn close(self) -> io::Result<()> {
         Ok(())
     }
 }
