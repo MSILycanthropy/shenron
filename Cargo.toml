@@ -11,6 +11,10 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 enum_glob_use = "warn"
 unwrap_used = "warn"
+# External async traits (russh, russh-sftp) require `async fn` signatures even
+# when a handler body has nothing to await; the suggested `std::future::ready`
+# rewrite breaks `?` and early returns.
+unused_async_trait_impl = "allow"
 
 [dependencies]
 cap-std = { version = "4", optional = true }
