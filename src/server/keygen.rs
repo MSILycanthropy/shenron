@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use russh::keys::{
-    Algorithm, PrivateKey, decode_secret_key, load_secret_key, ssh_key::LineEnding,
-};
+use russh::keys::{Algorithm, PrivateKey, decode_secret_key, load_secret_key, ssh_key::LineEnding};
 
 use crate::{Error, Result};
 
@@ -115,7 +113,11 @@ fn generate_and_persist(
     pub_path.push(".pub");
     key.public_key().write_openssh_file(Path::new(&pub_path))?;
 
-    tracing::info!("Generated {} host key at {}", key.algorithm(), path.display());
+    tracing::info!(
+        "Generated {} host key at {}",
+        key.algorithm(),
+        path.display()
+    );
 
     Ok(key)
 }
@@ -173,7 +175,10 @@ mod tests {
 
         load_or_generate(&dir.path().join("key"), HostKeyOptions::default()).expect("generate");
 
-        let mode = std::fs::metadata(dir.path()).expect("meta").permissions().mode();
+        let mode = std::fs::metadata(dir.path())
+            .expect("meta")
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o755);
     }
 

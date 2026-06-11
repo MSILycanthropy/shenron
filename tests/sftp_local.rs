@@ -75,7 +75,10 @@ async fn reads_and_writes_at_nonzero_offsets() {
         .expect("write at 6");
 
     let mut reader = fs.open_read("/pos.txt").await.expect("open_read");
-    assert_eq!(reader.read(0, 1024).await.expect("read all"), b"hello rust!");
+    assert_eq!(
+        reader.read(0, 1024).await.expect("read all"),
+        b"hello rust!"
+    );
     assert_eq!(reader.read(6, 5).await.expect("read at 6"), b"rust!");
 }
 
@@ -107,7 +110,11 @@ async fn rejects_symlinks_escaping_the_root() {
     let (outer, fs) = sandboxed_root();
 
     fs::write(outer.path().join("secret.txt"), b"top secret").expect("seed secret");
-    symlink(outer.path().join("secret.txt"), root(&outer).join("link_abs")).expect("abs link");
+    symlink(
+        outer.path().join("secret.txt"),
+        root(&outer).join("link_abs"),
+    )
+    .expect("abs link");
     symlink("../secret.txt", root(&outer).join("link_rel")).expect("rel link");
 
     for link in ["/link_abs", "/link_rel"] {

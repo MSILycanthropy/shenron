@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    Exit,
-    Middleware, Next, Session, SessionKind,
+    Exit, Middleware, Next, Session, SessionKind,
     middleware::builtins::sftp::{
         filesystem::Filesystem, handler::SftpHandler, local::LocalFilesystem,
     },

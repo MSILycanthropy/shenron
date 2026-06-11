@@ -57,7 +57,11 @@ impl Auth {
 
 impl From<bool> for Auth {
     fn from(accepted: bool) -> Self {
-        if accepted { Self::accept() } else { Self::reject() }
+        if accepted {
+            Self::accept()
+        } else {
+            Self::reject()
+        }
     }
 }
 

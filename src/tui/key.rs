@@ -213,7 +213,10 @@ mod tests {
 
     #[test]
     fn multibyte_utf8_chars_parse_individually() {
-        let codes: Vec<_> = keys("héllo".as_bytes()).into_iter().map(|(c, _)| c).collect();
+        let codes: Vec<_> = keys("héllo".as_bytes())
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
 
         let expected: Vec<_> = "héllo".chars().map(KeyCode::Char).collect();
         assert_eq!(codes, expected);
@@ -265,9 +268,7 @@ mod tests {
     fn bracketed_paste_is_one_event() {
         let inputs = parse_input(b"\x1b[200~hi there\x1b[201~");
 
-        assert!(
-            matches!(&inputs[..], [Input::Paste(text)] if text == "hi there")
-        );
+        assert!(matches!(&inputs[..], [Input::Paste(text)] if text == "hi there"));
     }
 
     #[test]
@@ -276,9 +277,7 @@ mod tests {
 
         assert_eq!(inputs.len(), 2);
         assert!(matches!(&inputs[0], Input::Paste(text) if text == "hi"));
-        assert!(
-            matches!(&inputs[1], Input::Key(key) if key.code == KeyCode::Char('x'))
-        );
+        assert!(matches!(&inputs[1], Input::Key(key) if key.code == KeyCode::Char('x')));
     }
 
     #[test]
@@ -292,10 +291,7 @@ mod tests {
     #[test]
     fn uppercase_letter_carries_shift() {
         // crossterm convention: the char stays uppercase, SHIFT is set.
-        assert_eq!(
-            keys(b"A"),
-            vec![(KeyCode::Char('A'), KeyModifiers::SHIFT)]
-        );
+        assert_eq!(keys(b"A"), vec![(KeyCode::Char('A'), KeyModifiers::SHIFT)]);
     }
 
     #[test]

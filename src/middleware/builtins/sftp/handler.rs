@@ -226,7 +226,10 @@ impl<F: Filesystem> russh_sftp::server::Handler for SftpHandler<F> {
     }
 
     async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
-        self.fs.remove(&filename).await.map_err(|e| status_code(&e))?;
+        self.fs
+            .remove(&filename)
+            .await
+            .map_err(|e| status_code(&e))?;
 
         status_ok(id)
     }
@@ -432,7 +435,12 @@ mod tests {
 
         let mut h = handler(&tmp);
         let file = h
-            .open(0, "/data".into(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                0,
+                "/data".into(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .expect("open")
             .handle;
@@ -466,7 +474,12 @@ mod tests {
         let mut h = handler(&tmp);
 
         let result = h
-            .open(0, "/nope".into(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                0,
+                "/nope".into(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await;
 
         assert!(matches!(result, Err(StatusCode::NoSuchFile)));
@@ -479,16 +492,18 @@ mod tests {
 
         let mut h = handler(&tmp);
         let file = h
-            .open(0, "/data".into(), OpenFlags::READ, FileAttributes::default())
+            .open(
+                0,
+                "/data".into(),
+                OpenFlags::READ,
+                FileAttributes::default(),
+            )
             .await
             .expect("open")
             .handle;
 
         assert!(h.close(1, file.clone()).await.is_ok());
-        assert!(matches!(
-            h.close(2, file).await,
-            Err(StatusCode::Failure)
-        ));
+        assert!(matches!(h.close(2, file).await, Err(StatusCode::Failure)));
     }
 
     #[tokio::test]

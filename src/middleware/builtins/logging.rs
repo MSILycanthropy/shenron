@@ -15,7 +15,11 @@ pub async fn logging(session: &mut Session, next: Next<'_>) -> Exit {
     };
 
     if let Some((term, size)) = session.pty() {
-        let _ = write!(kind, " pty(term={}, size={}x{})", term, size.width, size.height);
+        let _ = write!(
+            kind,
+            " pty(term={}, size={}x{})",
+            term, size.width, size.height
+        );
     }
 
     info!(

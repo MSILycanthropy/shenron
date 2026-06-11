@@ -52,7 +52,8 @@ where
         .expect("host key");
 
     if with_auth {
-        server = server.password_auth(|_user, _password| async { Auth::accept().with(Account(42)) });
+        server =
+            server.password_auth(|_user, _password| async { Auth::accept().with(Account(42)) });
     }
 
     tokio::spawn(server.app(app).serve());

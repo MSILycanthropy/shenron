@@ -2,8 +2,8 @@
 
 pub mod auth;
 mod error;
-mod exit;
 pub mod events;
+mod exit;
 pub mod middleware;
 pub mod server;
 mod session;
@@ -18,8 +18,8 @@ use std::pin::Pin;
 
 pub use auth::Auth;
 pub use error::{Error, Result};
-pub use exit::{Exit, IntoExit};
 pub use events::Events;
+pub use exit::{Exit, IntoExit};
 pub use middleware::{Middleware, Next, terminal};
 pub use russh::keys::{Algorithm, EcdsaCurve};
 pub use server::{HostKeyOptions, Server};

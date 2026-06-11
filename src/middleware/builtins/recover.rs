@@ -26,13 +26,14 @@ async fn guard(session: &mut Session, next: Next<'_>) -> Result<Exit, Panicked> 
     let remote = session.remote_addr();
 
     let mut fut = Box::pin(next.run(session));
-    let outcome = poll_fn(|cx| {
-        match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
-            Ok(poll) => poll.map(Ok),
-            Err(panic) => Poll::Ready(Err(panic)),
-        }
-    })
-    .await;
+    let outcome =
+        poll_fn(
+            |cx| match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+                Ok(poll) => poll.map(Ok),
+                Err(panic) => Poll::Ready(Err(panic)),
+            },
+        )
+        .await;
 
     outcome.map_err(|panic| Panicked {
         message: panic_message(panic),

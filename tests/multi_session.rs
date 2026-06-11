@@ -38,10 +38,7 @@ async fn second_session_keeps_auth_data_and_own_env() {
     first.exec(true, "first").await.expect("exec");
     let out_first = read_to_close(&mut first).await;
 
-    let mut second = handle
-        .channel_open_session()
-        .await
-        .expect("second channel");
+    let mut second = handle.channel_open_session().await.expect("second channel");
     second.set_env(true, "MARKER", "two").await.expect("env");
     second.exec(true, "second").await.expect("exec");
     let out_second = read_to_close(&mut second).await;
