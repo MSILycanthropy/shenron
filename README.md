@@ -36,12 +36,29 @@ Shenron is a library that makes writing this type of app in Rust just a wish awa
 
 ## Creating an App
 
-Your app is just an async function that takes a `Session` and returns it when done:
+Your app is just an async function that borrows the `Session`:
 
 ```rust
-async fn my_app(mut session: Session) -> shenron::Result<Session> {
+async fn my_app(session: &mut Session) -> shenron::Result {
     session.write_str("Hello from Shenron!\r\n").await?;
-    session.exit(0)
+    Ok(())
+}
+```
+
+The return value becomes the session's exit status, in the spirit of
+`std::process::Termination`: `()` exits 0, a `u32` exits with that code, and
+an `Err` is logged and exits 1.
+
+```rust
+async fn my_app(session: &mut Session) -> shenron::Result<u32> {
+    let Some(argv) = session.command() else {
+        session.write_stderr_str("usage: ssh host <command>\n").await?;
+        return Ok(2);
+    };
+
+    // ...
+
+    Ok(0)
 }
 ```
 
@@ -59,7 +76,8 @@ Server::new()
 
 By default Shenron accepts every connection — handy for public apps and local
 development. To decide who gets in, add a password and/or public-key handler.
-Each returns whether to accept the connection.
+Each returns whether to accept the connection. Once either is configured, only
+those methods are advertised to clients and the `none` probe is rejected.
 
 ```rust
 Server::new()
@@ -164,7 +182,7 @@ Your app and middleware receive a `Session`. Beyond I/O it exposes who connected
 and a typed store for carrying data along the chain.
 
 ```rust
-async fn my_app(mut session: Session) -> shenron::Result<Session> {
+async fn my_app(session: &mut Session) -> shenron::Result {
     let _user = session.user();
     let _addr = session.remote_addr();
 
@@ -174,33 +192,37 @@ async fn my_app(mut session: Session) -> shenron::Result<Session> {
     }
 
     session.write_str("Hello!\r\n").await?;
-    session.exit(0)
+    Ok(())
 }
 ```
 
 **Context store.** Each session carries a typed key-value store. Auth handlers
 stash data with `Auth::with`; middleware and your app read and write it with
-`get` / `insert`:
+`get` / `get_mut` / `insert`, or take values out with `remove`:
 
 ```rust
 struct Account { id: u32 }
 
-async fn my_app(mut session: Session) -> shenron::Result<Session> {
+async fn my_app(session: &mut Session) -> shenron::Result {
     if let Some(account) = session.get::<Account>() {
         let msg = format!("Welcome back, #{}\r\n", account.id);
         session.write_str(&msg).await?;
     }
-    session.exit(0)
+    Ok(())
 }
 ```
 
 Some commonly used session methods:
 
 - `user()` / `remote_addr()` / `public_key()` — connection identity
-- `kind()`, `command()`, `pty()`, `term()` — what the client requested
+- `kind()`, `command()`, `pty()`, `term()`, `env()` — what the client requested.
+  `kind()` borrows a `SessionKind`; `command()` is the POSIX-parsed argv of an
+  exec request (`raw_command()` gives the unparsed string)
+- `next().await` — the event stream: `Input`, `Resize`, `Signal`, `Eof`
 - `write_str` / `write` / `write_stderr_str` — output
-- `get::<T>()` / `insert::<T>(value)` — the context store
-- `exit(code)` — finish the session
+- `get::<T>()` / `get_mut::<T>()` / `remove::<T>()` / `insert(value)` — the context store
+- the handler's return value reports the exit code; `abort(code)` ends the
+  session early without waiting for the handler to return
 
 ## Server configuration
 
@@ -227,20 +249,84 @@ Server::new()
     .app(my_app)
 ```
 
+Stop accepting new connections when a future completes:
+
+```rust
+Server::new()
+    .shutdown_signal(async {
+        tokio::signal::ctrl_c().await.ok();
+    })
+    .app(my_app)
+```
+
+## Terminal UIs
+
+With the `ratatui` feature, your app can drive the session as a
+[ratatui][ratatui] TUI. `session.tui()` returns a handle that renders to the
+client's terminal, parses its input into key and paste events, and follows
+window resizes automatically. The type parameter is your own message type,
+letting background tasks push into the event loop through `sender()`:
+
+```rust
+use ratatui::crossterm::event::KeyCode;
+use shenron::{Result, Server, Session, tui};
+
+enum Msg {
+    Tick,
+}
+
+async fn counter(session: &mut Session) -> Result {
+    let mut tui = session.tui::<Msg>()?.alt_screen();
+
+    // Server-push: wake the loop from a background task.
+    let tx = tui.sender();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if tx.send(Msg::Tick).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut ticks = 0;
+    loop {
+        tui.draw(|frame| {
+            // draw your UI with ratatui
+        })
+        .await?;
+
+        match tui.next().await {
+            Some(tui::Event::Key(key)) if key.code == KeyCode::Char('q') => break,
+            Some(tui::Event::App(Msg::Tick)) => ticks += 1,
+            Some(tui::Event::Eof) | None => break,
+            _ => {}
+        }
+    }
+
+    tui.close().await
+}
+```
+
+Events are either client input (`Key`, `Paste`, `Resize`, `Eof`) or your own
+messages (`App`). `session.tui()` errors when the client didn't request a PTY,
+so pair it with the [`active_term`](#active-terminal) middleware to reject
+those sessions up front. See the full [TUI example](examples/tui.rs).
+
 ## Examples
 
 There are examples for a standalone [Ratatui app](examples/tui.rs) and others in the [examples](examples) folder.
 
 ## Middleware
 
-Shenron middleware works like middleware in most HTTP frameworks. Each middleware wraps the next, letting you handle sessions before and after passing them down the chain.
+Shenron middleware works like middleware in most HTTP frameworks. Each middleware borrows the session, letting you act before and after lending it down the chain. `next.run` resolves the rest of the chain to an `Exit` — failures arrive as `Exit::Error` rather than `Err`, so you inspect rather than `?`:
 
 ```rust
-async fn my_middleware(session: Session, next: Next) -> Result {
+async fn my_middleware(session: &mut Session, next: Next<'_>) -> Exit {
     // do stuff before
-    let session = next.run(session).await?;
+    let exit = next.run(session).await;
     // do stuff after
-    session.exit(0)
+    exit
 }
 ```
 
@@ -252,7 +338,7 @@ Server::new()
     .bind("0.0.0.0:2222")
     .host_key_path("host_key")?
     .with(logging)        // 1st: sees session first, result last
-    .with(activeterm)     // 2nd: runs inside logging
+    .with(active_term)    // 2nd: runs inside logging
     .app(my_app)          // innermost: your application
     .serve()
     .await
@@ -262,49 +348,19 @@ Server::new()
 
 Shenron ships with a collection of middleware to handle common tasks.
 
-### Ratatui
-
-The `ratatui` middleware makes it easy to serve [ratatui][ratatui] TUIs over SSH.
-Each session gets its own app instance with window resize handled automatically.
-
-```rust
-use shenron::tui::{App, Ratatui};
-
-#[derive(Clone)]
-struct MyApp { /* ... */ }
-
-impl App for MyApp {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // return false to exit
-        true
-    }
-
-    fn draw(&self, frame: &mut Frame) {
-        // draw your UI
-    }
-}
-
-Server::new()
-    .bind("0.0.0.0:2222")
-    .app(Ratatui { app: MyApp::new() })
-    .serve()
-    .await
-```
-
-Requires the `ratatui` feature.
-
 ### SFTP
 
-Full SFTP server support. Implement the `Filesystem` trait for custom backends,
-or use the included `LocalFilesystem` to serve a local directory.
+Full SFTP server support. Implement the async `Filesystem` trait for custom
+backends (network-backed stores can be natively async), or serve a local
+directory with `Sftp::local`:
 
 ```rust
-use shenron::sftp::{Sftp, LocalFilesystem};
+use shenron::sftp::Sftp;
 
 Server::new()
     .bind("0.0.0.0:2222")
     .host_key_file("host_key")?
-    .with(Sftp::new(LocalFilesystem::new("/srv/files")))
+    .with(Sftp::local("/srv/files"))
     .app(my_app)
     .serve()
     .await
@@ -336,8 +392,8 @@ Server::new()
 
 Contain a panicking handler or middleware instead of letting it drop the session
 abruptly. The panic is logged via `tracing` (with the user and remote address)
-and converted into an error, so the connection closes cleanly and the server and
-other sessions keep running.
+and converted into an `Exit::Error` (exit 1), so the connection closes cleanly
+and the server and other sessions keep running.
 
 ```rust
 use shenron::middleware::{logging, recover};
@@ -398,7 +454,10 @@ Clients running `ssh host command` will get rejected. Interactive `ssh host` wor
 
 ### Access Control
 
-Restrict which commands can be executed via `ssh host command`.
+Restrict which programs can be executed via `ssh host command`. The check
+compares the *program* — `argv[0]` of the POSIX-parsed command — exactly
+against the allowlist, so allowing `git` permits `git push` and `git pull`
+alike.
 
 ```rust
 use shenron::middleware::AccessControl;
@@ -412,7 +471,10 @@ Server::new()
     .await
 ```
 
-Commands not in the allowlist get rejected with exit code 1.
+Commands not in the allowlist get rejected with exit code 1. Sessions without
+an exec command (shells, subsystems) pass through untouched. Note this is only
+a security boundary if your app executes the parsed argv directly — never hand
+`raw_command()` to a shell.
 
 ### Rate Limiting
 
@@ -469,49 +531,52 @@ Server::new()
 
 ### Custom Middleware
 
-Writing your own middleware is easy peasy. A middleware is just an async function
-that takes a `Session` and a `Next`, and returns a `Result<Session>`.
+Writing your own middleware is easy peasy. A middleware is just an async
+function that takes a `&mut Session` and a `Next`, and returns anything
+`IntoExit` — `Exit` itself, or `Result<Exit>` when you want `?` for your own
+I/O:
 
 ```rust
-use shenron::{Session, Next, Result};
+use shenron::{Exit, Next, Result, Session};
 
-async fn my_middleware(session: Session, next: Next) -> Result {
+async fn my_middleware(session: &mut Session, next: Next<'_>) -> Result<Exit> {
     // do something before the inner handler runs
-    let mut session = next.run(session).await?;
+    let exit = next.run(session).await;
     // do something after the inner handler runs
-    Ok(session)
+    Ok(exit)
 }
 ```
 
 For middleware with configuration, implement the `Middleware` trait on a struct:
 
 ```rust
-use shenron::{Middleware, Session, Next, Result};
+use shenron::{Exit, Middleware, Next, Result, Session};
 
-#[derive(Clone)]
 struct Greeter {
     message: String,
 }
 
 impl Middleware for Greeter {
-    async fn handle(&self, mut session: Session, next: Next) -> Result {
+    type Output = Result<Exit>;
+
+    async fn handle(&self, session: &mut Session, next: Next<'_>) -> Result<Exit> {
         session.write_str(&self.message).await?;
-        next.run(session).await
+        Ok(next.run(session).await)
     }
 }
 ```
 
-Middleware can also short-circuit the chain. This is useful for things like
-authentication or rejecting certain session types:
+Middleware can also short-circuit the chain by returning without calling
+`next.run`. This is useful for things like authentication or rejecting certain
+session types:
 
 ```rust
-async fn require_user(session: Session, next: Next) -> Result {
+async fn require_user(session: &mut Session, next: Next<'_>) -> Result<Exit> {
     if session.user() == "admin" {
-        next.run(session).await
+        Ok(next.run(session).await)
     } else {
-        let mut session = session;
         session.write_stderr_str("Access denied\n").await?;
-        Ok(session.exit(1))
+        Ok(Exit::Code(1))
     }
 }
 ```
