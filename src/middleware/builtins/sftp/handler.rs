@@ -472,6 +472,50 @@ mod tests {
         assert!(matches!(result, Err(StatusCode::NoSuchFile)));
     }
 
+    #[tokio::test]
+    async fn double_close_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        fs::write(tmp.path().join("data"), b"x").expect("write");
+
+        let mut h = handler(&tmp);
+        let file = h
+            .open(0, "/data".into(), OpenFlags::READ, FileAttributes::default())
+            .await
+            .expect("open")
+            .handle;
+
+        assert!(h.close(1, file.clone()).await.is_ok());
+        assert!(matches!(
+            h.close(2, file).await,
+            Err(StatusCode::Failure)
+        ));
+    }
+
+    #[tokio::test]
+    async fn ops_on_unknown_handle_fail() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut h = handler(&tmp);
+
+        let bogus = || "ffffffffffffffff".to_string();
+
+        assert!(matches!(
+            h.read(0, bogus(), 0, 16).await,
+            Err(StatusCode::Failure)
+        ));
+        assert!(matches!(
+            h.write(1, bogus(), 0, b"x".to_vec()).await,
+            Err(StatusCode::Failure)
+        ));
+        assert!(matches!(
+            h.fstat(2, bogus()).await,
+            Err(StatusCode::Failure)
+        ));
+        assert!(matches!(
+            h.readdir(3, bogus()).await,
+            Err(StatusCode::Failure)
+        ));
+    }
+
     #[test]
     fn longname_formats_recent_file() {
         // 2023-11-14 22:13:20 UTC
