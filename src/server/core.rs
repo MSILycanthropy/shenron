@@ -258,16 +258,17 @@ impl Server {
     /// plain public key. russh has already verified the certificate's
     /// signature, validity window, and the client's possession of the private
     /// key — the handler decides policy: is the signing CA trusted, is the
-    /// username allowed, is it a user (not host) certificate.
+    /// username allowed, is it a user (not host) certificate. For the
+    /// standard checks use [`trusted_ca_keys`](crate::auth::trusted_ca_keys).
     ///
     /// # Example
     /// ```no_run
     /// # use shenron::Server;
-    /// use russh::keys::ssh_key::certificate::CertType;
-    ///
-    /// let _server = Server::new().cert_auth(|user, cert| async move {
-    ///     cert.cert_type() == CertType::User && cert.valid_principals().contains(&user)
-    /// });
+    /// # fn main() -> shenron::Result<()> {
+    /// let _server = Server::new()
+    ///     .cert_auth(shenron::auth::trusted_ca_keys("ca.pub")?);
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn cert_auth<F, Fut>(mut self, handler: F) -> Self

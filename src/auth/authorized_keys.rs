@@ -5,6 +5,10 @@ use russh::keys::{
     ssh_key::{AuthorizedKeys, public::KeyData},
 };
 
+/// A ready-made pubkey handler, accepted by
+/// [`pubkey_auth`](crate::server::Server::pubkey_auth) like any closure.
+pub type PubkeyHandler = Box<dyn Fn(String, PublicKey) -> Ready<bool> + Send + Sync>;
+
 /// Build a pubkey handler that accepts only keys listed in an OpenSSH
 /// `authorized_keys` file.
 ///
@@ -29,15 +33,15 @@ use russh::keys::{
 /// # Errors
 ///
 /// Returns `Err` if the file cannot be read or parsed.
-pub fn authorized_keys(
-    path: impl AsRef<Path>,
-) -> crate::Result<impl Fn(String, PublicKey) -> Ready<bool> + Send + Sync + Clone> {
+pub fn authorized_keys(path: impl AsRef<Path>) -> crate::Result<PubkeyHandler> {
     let keys: HashSet<KeyData> = AuthorizedKeys::read_file(path.as_ref())?
         .into_iter()
         .map(|entry| entry.public_key().key_data().clone())
         .collect();
 
-    Ok(move |_user: String, key: PublicKey| std::future::ready(keys.contains(key.key_data())))
+    Ok(Box::new(move |_user: String, key: PublicKey| {
+        std::future::ready(keys.contains(key.key_data()))
+    }))
 }
 
 #[cfg(test)]
