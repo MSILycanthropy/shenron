@@ -9,7 +9,7 @@ use std::{
 
 use russh::{
     Channel, ChannelId,
-    keys::PublicKey,
+    keys::{Certificate, PublicKey},
     server::{Auth, Msg, Session as RusshSession},
 };
 
@@ -220,6 +220,33 @@ impl russh::server::Handler for ShenronHandler {
 
         if accepted {
             self.public_key = Some(public_key.clone());
+            self.extensions.merge(outcome.into_extensions());
+        }
+
+        Ok(self.finish_auth(user, accepted))
+    }
+
+    /// Certificate-bearing publickey auth. russh has already verified the
+    /// cert's internal signature, its validity window, and the client's
+    /// possession of the private key; the handler decides policy (CA trust,
+    /// principals, cert type).
+    async fn auth_openssh_certificate(
+        &mut self,
+        user: &str,
+        cert: &Certificate,
+    ) -> crate::Result<Auth> {
+        let outcome: AuthOutcome = if let Some(ref handler) = self.auth.cert {
+            handler.verify(user, cert).await
+        } else {
+            self.auth.is_empty().into()
+        };
+
+        let accepted = outcome.accepted();
+
+        if accepted {
+            // Sessions see the cert's inner key, so key-based middleware
+            // works the same for cert and plain pubkey logins.
+            self.public_key = Some(PublicKey::new(cert.public_key().clone(), ""));
             self.extensions.merge(outcome.into_extensions());
         }
 

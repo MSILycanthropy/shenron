@@ -252,6 +252,35 @@ impl Server {
         self
     }
 
+    /// Set an OpenSSH certificate authentication handler
+    ///
+    /// Called when a client authenticates with a certificate instead of a
+    /// plain public key. russh has already verified the certificate's
+    /// signature, validity window, and the client's possession of the private
+    /// key — the handler decides policy: is the signing CA trusted, is the
+    /// username allowed, is it a user (not host) certificate.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use shenron::Server;
+    /// use russh::keys::ssh_key::certificate::CertType;
+    ///
+    /// let _server = Server::new().cert_auth(|user, cert| async move {
+    ///     cert.cert_type() == CertType::User && cert.valid_principals().contains(&user)
+    /// });
+    /// ```
+    #[must_use]
+    pub fn cert_auth<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, russh::keys::Certificate) -> Fut + Send + Sync + 'static,
+        Fut: Future + Send + 'static,
+        Fut::Output: Into<crate::Auth>,
+    {
+        self.auth.cert = Some(Arc::new(handler));
+
+        self
+    }
+
     /// Constant delay before every *failed* auth attempt is answered.
     ///
     /// This is a brute-force throttle and timing-side-channel mitigation, not
