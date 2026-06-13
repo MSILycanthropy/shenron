@@ -38,6 +38,25 @@ where
     for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
     R: shenron::IntoExit,
 {
+    start_server_with(app, |server| {
+        if with_auth {
+            server.password_auth(|_user, _password| async { Auth::accept().with(Account(42)) })
+        } else {
+            server
+        }
+    })
+    .await
+}
+
+/// Like [`start_server`] but the caller configures auth (or anything else)
+/// on the builder before it serves.
+pub async fn start_server_with<F, R, C>(app: F, configure: C) -> u16
+where
+    F: AsyncFn(&mut Session) -> R + Send + Sync + 'static,
+    for<'a> <F as std::ops::AsyncFnMut<(&'a mut Session,)>>::CallRefFuture<'a>: Send,
+    R: shenron::IntoExit,
+    C: FnOnce(Server) -> Server,
+{
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind probe")
         .local_addr()
@@ -46,15 +65,12 @@ where
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
 
-    let mut server = Server::new()
-        .bind(format!("127.0.0.1:{port}"))
-        .host_key_path(tmp.path().join("host_key"))
-        .expect("host key");
-
-    if with_auth {
-        server =
-            server.password_auth(|_user, _password| async { Auth::accept().with(Account(42)) });
-    }
+    let server = configure(
+        Server::new()
+            .bind(format!("127.0.0.1:{port}"))
+            .host_key_path(tmp.path().join("host_key"))
+            .expect("host key"),
+    );
 
     tokio::spawn(server.app(app).serve());
 

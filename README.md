@@ -105,6 +105,18 @@ Server::new()
     .await
 ```
 
+For an allowlist, point at an OpenSSH `authorized_keys` file instead of writing
+the comparison yourself; for SSH certificates, trust a CA and let it vouch for
+users — the helper checks the signature, validity window, principals, and that
+it's a user (not host) cert:
+
+```rust
+Server::new()
+    .pubkey_auth(shenron::auth::authorized_keys(".ssh/authorized_keys")?)
+    .cert_auth(shenron::auth::trusted_ca_keys("/etc/ssh/user_ca.pub")?)
+    .app(my_app)
+```
+
 A handler can return a plain `bool`, or an `Auth` outcome that also attaches
 typed data to the session — handy for passing the looked-up account straight to
 your app:
