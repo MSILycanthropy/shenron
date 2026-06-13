@@ -282,6 +282,35 @@ impl Server {
         self
     }
 
+    /// Set a keyboard-interactive authentication handler.
+    ///
+    /// The handler is called once per connection with the username and a
+    /// [`Challenger`](crate::auth::Challenger). Drive the conversation by
+    /// awaiting [`Challenger::challenge`](crate::auth::Challenger::challenge)
+    /// as many times as needed — each call sends prompts and returns the
+    /// client's answers — then return an [`Auth`](crate::Auth) verdict.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use shenron::{Server, Auth};
+    /// # use shenron::auth::Prompt;
+    /// let _server = Server::new().keyboard_interactive_auth(|user, mut ch| async move {
+    ///     let answers = ch.challenge("", "", [Prompt::hidden("OTP code: ")]).await?;
+    ///
+    ///     Ok(Auth::from(answers[0] == "123456" && user == "admin"))
+    /// });
+    /// ```
+    #[must_use]
+    pub fn keyboard_interactive_auth<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(String, crate::auth::Challenger) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = crate::Result<crate::Auth>> + Send + 'static,
+    {
+        self.auth.keyboard_interactive = Some(Arc::new(handler));
+
+        self
+    }
+
     /// Constant delay before every *failed* auth attempt is answered.
     ///
     /// This is a brute-force throttle and timing-side-channel mitigation, not

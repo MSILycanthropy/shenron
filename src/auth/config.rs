@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use russh::{MethodKind, MethodSet};
 
-use crate::auth::{CertAuth, PasswordAuth, PubkeyAuth};
+use crate::auth::{CertAuth, KeyboardInteractiveAuth, PasswordAuth, PubkeyAuth};
 
 /// Configured authentication for a server
 #[derive(Default, Clone)]
@@ -10,16 +10,20 @@ pub struct AuthConfig {
     pub password: Option<Arc<dyn PasswordAuth>>,
     pub pubkey: Option<Arc<dyn PubkeyAuth>>,
     pub cert: Option<Arc<dyn CertAuth>>,
+    pub keyboard_interactive: Option<Arc<dyn KeyboardInteractiveAuth>>,
 }
 
 impl AuthConfig {
     pub fn is_empty(&self) -> bool {
-        self.password.is_none() && self.pubkey.is_none() && self.cert.is_none()
+        self.password.is_none()
+            && self.pubkey.is_none()
+            && self.cert.is_none()
+            && self.keyboard_interactive.is_none()
     }
 
-    /// The auth methods this server actually answers — never russh's
-    /// default set, which advertises methods we always reject
-    /// (keyboard-interactive, hostbased).
+    /// The auth methods this server actually answers — never russh's default
+    /// set, which advertises `hostbased` (always rejected) and
+    /// keyboard-interactive even when no handler is configured.
     ///
     /// An open server (no handlers) accepts `none`; password and publickey
     /// stay advertised for clients that skip `none`.
@@ -44,6 +48,10 @@ impl AuthConfig {
         // server still advertises (and only answers) `publickey`.
         if self.pubkey.is_some() || self.cert.is_some() {
             methods.push(MethodKind::PublicKey);
+        }
+
+        if self.keyboard_interactive.is_some() {
+            methods.push(MethodKind::KeyboardInteractive);
         }
 
         methods.as_slice().into()

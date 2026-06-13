@@ -139,6 +139,33 @@ Server::new()
 Your app reads it back with `session.get::<Account>()` (see
 [Working with Sessions](#working-with-sessions)).
 
+### Keyboard-interactive
+
+The methods above answer in one shot. Keyboard-interactive instead runs a
+conversation: the handler sends rounds of prompts and reads the client's
+answers, which is how you implement OTP codes, MFA, or any challenge sequence.
+
+The handler is called once per connection with a `Challenger`. Each
+`challenge` call sends prompts (use `Prompt::hidden` for secrets, `Prompt::echo`
+for visible input) and returns the answers in order. Run as many rounds as you
+need, then return an `Auth` verdict — `bool`, or `Auth::accept().with(..)` to
+attach session data like the other methods:
+
+```rust
+use shenron::auth::Prompt;
+
+Server::new()
+    .keyboard_interactive_auth(|user, mut ch| async move {
+        let code = ch.challenge("", "Two-factor", [Prompt::hidden("OTP code: ")]).await?;
+
+        Ok(Auth::from(verify_otp(&user, &code[0]).await))
+    })
+    .app(my_app)
+```
+
+`challenge` errors only if the client disconnects mid-conversation; propagate it
+with `?` and the connection is already gone.
+
 ## Host keys
 
 A host key is the server's stable cryptographic identity — it's what lets

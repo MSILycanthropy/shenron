@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     net::SocketAddr,
     sync::{
@@ -10,11 +11,13 @@ use std::{
 use russh::{
     Channel, ChannelId,
     keys::{Certificate, PublicKey},
-    server::{Auth, Msg, Session as RusshSession},
+    server::{Auth, Msg, Response, Session as RusshSession},
 };
+use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
-    Auth as AuthOutcome, Extensions, PtySize, Session, SessionKind, auth::AuthConfig,
+    Auth as AuthOutcome, Extensions, PtySize, Session, SessionKind,
+    auth::{AuthConfig, Challenge},
     middleware::ErasedHandler,
 };
 
@@ -47,6 +50,7 @@ impl russh::server::Server for ShenronServer {
             auth: Arc::clone(&self.auth),
             extensions: Extensions::default(),
             banner: self.banner.clone(),
+            kbi: None,
         }
     }
 }
@@ -77,6 +81,27 @@ struct PendingChannel {
     pty: Option<(String, PtySize)>,
 }
 
+/// In-flight keyboard-interactive conversation. russh calls us once per round;
+/// the handler runs as a task and we relay challenges and answers across
+/// `rx`/`pending` until it returns a verdict on `join`.
+struct KbiState {
+    rx: tokio::sync::mpsc::Receiver<Challenge>,
+    join: JoinHandle<crate::Result<AuthOutcome>>,
+    pending: Option<oneshot::Sender<Vec<String>>>,
+}
+
+/// Decode keyboard-interactive answers strictly as UTF-8, as RFC 4256
+/// requires. Lossy decoding would let a mangled byte silently become the
+/// string a handler compares against; instead, any invalid answer rejects the
+/// whole set (returns `None`).
+fn decode_answers<B: AsRef<[u8]>>(answers: impl IntoIterator<Item = B>) -> Option<Vec<String>> {
+    answers
+        .into_iter()
+        .map(|b| String::from_utf8(b.as_ref().to_vec()))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+}
+
 pub(crate) struct ShenronHandler {
     handler: Arc<dyn ErasedHandler>,
     remote_addr: Option<SocketAddr>,
@@ -87,6 +112,7 @@ pub(crate) struct ShenronHandler {
     auth: Arc<AuthConfig>,
     extensions: Extensions,
     banner: Option<String>,
+    kbi: Option<KbiState>,
 }
 
 impl ShenronHandler {
@@ -141,6 +167,52 @@ impl ShenronHandler {
             self.extensions.clone(),
             remote_addr,
         ))
+    }
+
+    /// Pump the keyboard-interactive task one step: wait for its next challenge
+    /// (relay it as `Auth::Partial`) or its completion (finish auth).
+    async fn kbi_advance(&mut self, user: &str) -> crate::Result<Auth> {
+        let next = self
+            .kbi
+            .as_mut()
+            .expect("kbi state present")
+            .rx
+            .recv()
+            .await;
+
+        let Some(challenge) = next else {
+            // Channel closed: the handler future returned. Collect its verdict.
+            let state = self.kbi.take().expect("kbi state present");
+
+            let outcome = state
+                .join
+                .await
+                .map_err(|e| crate::Error::Panic(e.to_string()))??;
+
+            let accepted = outcome.accepted();
+
+            if accepted {
+                self.extensions.merge(outcome.into_extensions());
+            }
+
+            return Ok(self.finish_auth(user, accepted));
+        };
+
+        let prompts: Vec<(Cow<'static, str>, bool)> = challenge
+            .prompts
+            .iter()
+            .map(|p| (Cow::Owned(p.text.clone()), p.echo))
+            .collect();
+
+        let auth = Auth::Partial {
+            name: Cow::Owned(challenge.name),
+            instructions: Cow::Owned(challenge.instructions),
+            prompts: Cow::Owned(prompts),
+        };
+
+        self.kbi.as_mut().expect("kbi state present").pending = Some(challenge.reply);
+
+        Ok(auth)
     }
 
     fn run_handler(&self, mut session: Session) {
@@ -273,6 +345,57 @@ impl russh::server::Handler for ShenronHandler {
         Ok(self.finish_auth(user, accepted))
     }
 
+    /// Challenge-response auth. russh drives this once per round: `None`
+    /// response starts the conversation, `Some` carries the client's answers
+    /// to the previous prompts. The handler runs as a task; we relay each
+    /// [`Challenger::challenge`](crate::auth::Challenger::challenge) as an
+    /// `Auth::Partial` and feed answers back until it returns a verdict.
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        user: &str,
+        _submethods: &str,
+        response: Option<Response<'a>>,
+    ) -> crate::Result<Auth> {
+        let Some(handler) = self.auth.keyboard_interactive.clone() else {
+            return Ok(self.finish_auth(user, false));
+        };
+
+        let Some(response) = response else {
+            // First round: spawn the handler and relay its first challenge.
+            let (challenger, rx) = crate::auth::channel();
+
+            let owned_user = user.to_string();
+            let join = tokio::spawn(async move { handler.verify(&owned_user, challenger).await });
+
+            self.kbi = Some(KbiState {
+                rx,
+                join,
+                pending: None,
+            });
+
+            return self.kbi_advance(user).await;
+        };
+
+        // Continuation: hand the answers to the waiting challenge, then advance.
+        // A missing state or reply slot means answers arrived with no challenge
+        // outstanding — a protocol violation, so reject.
+        let Some(reply) = self.kbi.as_mut().and_then(|s| s.pending.take()) else {
+            return Ok(self.finish_auth(user, false));
+        };
+
+        // Invalid input rejects the attempt — dropping `reply` unwinds the
+        // waiting handler — and the client may restart.
+        let Some(answers) = decode_answers(response) else {
+            return Ok(self.finish_auth(user, false));
+        };
+
+        // A dropped receiver means the handler already ended; kbi_advance will
+        // observe the closed channel and read its result.
+        let _ = reply.send(answers);
+
+        self.kbi_advance(user).await
+    }
+
     async fn env_request(
         &mut self,
         channel: russh::ChannelId,
@@ -394,6 +517,7 @@ mod tests {
             auth: Arc::new(AuthConfig::default()),
             extensions: Extensions::default(),
             banner: None,
+            kbi: None,
         }
     }
 
@@ -420,5 +544,17 @@ mod tests {
 
         assert!(matches!(h.finish_auth("anyone", true), Auth::Accept));
         assert_eq!(h.user.as_deref(), Some("anyone"));
+    }
+
+    #[test]
+    fn decode_answers_accepts_utf8_including_empty() {
+        let answers = decode_answers([b"1234".as_slice(), b"".as_slice()]);
+
+        assert_eq!(answers, Some(vec!["1234".to_string(), String::new()]));
+    }
+
+    #[test]
+    fn decode_answers_rejects_invalid_utf8() {
+        assert!(decode_answers([b"\xff\xfe".as_slice()]).is_none());
     }
 }
